@@ -803,8 +803,16 @@ namespace RealtimePlayGround
                             default:
                                 if (message.Type is RealtimeClientMessageType.RawContentOnly && message.RawRepresentation is not null)
                                 {
-                                    // For raw content only, use the provided raw representation
-                                    jsonMessage = JsonSerializer.Deserialize<JsonObject>(message.RawRepresentation);
+                                    if (message.RawRepresentation is string rawString)
+                                    {
+                                        // For raw string content, parse it directly
+                                        jsonMessage = JsonSerializer.Deserialize<JsonObject>(rawString);
+                                    }
+                                    else if (message.RawRepresentation is JsonObject rawJsonObject)
+                                    {
+                                        // For raw JsonObject content, use it directly
+                                        jsonMessage = rawJsonObject;
+                                    }
                                 }
                                 break;
                         }
