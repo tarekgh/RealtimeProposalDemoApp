@@ -250,30 +250,30 @@ namespace RealtimePlayGround
                     sessionObject["output_modalities"] = modalitiesArray;
                 }
 
-                if (options.PromptTemplate is not null && !string.IsNullOrEmpty(options.PromptTemplate.Id))
-                {
-                    var promptObj = new JsonObject
-                    {
-                        ["id"] = options.PromptTemplate.Id
-                    };
+                //if (options.PromptTemplate is not null && !string.IsNullOrEmpty(options.PromptTemplate.Id))
+                //{
+                //    var promptObj = new JsonObject
+                //    {
+                //        ["id"] = options.PromptTemplate.Id
+                //    };
 
-                    if (options.PromptTemplate.Variables is not null && options.PromptTemplate.Variables.Count > 0)
-                    {
-                        var variablesObj = new JsonObject();
-                        foreach (var kvp in options.PromptTemplate.Variables)
-                        {
-                            variablesObj[kvp.Key] = JsonValue.Create(kvp.Value);
-                        }
-                        promptObj["variables"] = variablesObj;
-                    }
+                //    if (options.PromptTemplate.Variables is not null && options.PromptTemplate.Variables.Count > 0)
+                //    {
+                //        var variablesObj = new JsonObject();
+                //        foreach (var kvp in options.PromptTemplate.Variables)
+                //        {
+                //            variablesObj[kvp.Key] = JsonValue.Create(kvp.Value);
+                //        }
+                //        promptObj["variables"] = variablesObj;
+                //    }
 
-                    if (!string.IsNullOrEmpty(options.PromptTemplate.Version))
-                    {
-                        promptObj["version"] = options.PromptTemplate.Version;
-                    }
+                //    if (!string.IsNullOrEmpty(options.PromptTemplate.Version))
+                //    {
+                //        promptObj["version"] = options.PromptTemplate.Version;
+                //    }
 
-                    sessionObject["prompt"] = promptObj;
-                }
+                //    sessionObject["prompt"] = promptObj;
+                //}
                 // to do item.input_audio_transcription.logprobs and tools properties
             }
             else if (options.SessionKind == RealtimeSessionKind.Transcription)
@@ -553,30 +553,30 @@ namespace RealtimePlayGround
                                 }
 
                                 // Handle PromptTemplate
-                                if (responseCreate.PromptTemplate is not null && !string.IsNullOrEmpty(responseCreate.PromptTemplate.Id))
-                                {
-                                    var promptObj = new JsonObject
-                                    {
-                                        ["id"] = responseCreate.PromptTemplate.Id
-                                    };
+                                //if (responseCreate.PromptTemplate is not null && !string.IsNullOrEmpty(responseCreate.PromptTemplate.Id))
+                                //{
+                                //    var promptObj = new JsonObject
+                                //    {
+                                //        ["id"] = responseCreate.PromptTemplate.Id
+                                //    };
 
-                                    if (responseCreate.PromptTemplate.Variables is not null && responseCreate.PromptTemplate.Variables.Count > 0)
-                                    {
-                                        var variablesObj = new JsonObject();
-                                        foreach (var kvp in responseCreate.PromptTemplate.Variables)
-                                        {
-                                            variablesObj[kvp.Key] = JsonValue.Create(kvp.Value);
-                                        }
-                                        promptObj["variables"] = variablesObj;
-                                    }
+                                //    if (responseCreate.PromptTemplate.Variables is not null && responseCreate.PromptTemplate.Variables.Count > 0)
+                                //    {
+                                //        var variablesObj = new JsonObject();
+                                //        foreach (var kvp in responseCreate.PromptTemplate.Variables)
+                                //        {
+                                //            variablesObj[kvp.Key] = JsonValue.Create(kvp.Value);
+                                //        }
+                                //        promptObj["variables"] = variablesObj;
+                                //    }
 
-                                    if (!string.IsNullOrEmpty(responseCreate.PromptTemplate.Version))
-                                    {
-                                        promptObj["version"] = responseCreate.PromptTemplate.Version;
-                                    }
+                                //    if (!string.IsNullOrEmpty(responseCreate.PromptTemplate.Version))
+                                //    {
+                                //        promptObj["version"] = responseCreate.PromptTemplate.Version;
+                                //    }
 
-                                    responseObj["prompt"] = promptObj;
-                                }
+                                //    responseObj["prompt"] = promptObj;
+                                //}
 
                                 // Handle Function Tool Name
                                 if (!string.IsNullOrEmpty(responseCreate.FunctionToolName))
