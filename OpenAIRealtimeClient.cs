@@ -1108,40 +1108,40 @@ namespace RealtimePlayGround
                     realtimeServerInputAudioTranscriptionMessage.Error = errorContent;
                 }
 
-                if (root.TryGetProperty("logprobs", out var logProbElement) && logProbElement.ValueKind == JsonValueKind.Array)
-                {
-                    List<LogProbability> logProbabilities = new List<LogProbability>();
+                //if (root.TryGetProperty("logprobs", out var logProbElement) && logProbElement.ValueKind == JsonValueKind.Array)
+                //{
+                //    List<LogProbability> logProbabilities = new List<LogProbability>();
 
-                    foreach (var logProbItem in logProbElement.EnumerateArray())
-                    {
-                        LogProbability logProbability = new LogProbability();
+                //    foreach (var logProbItem in logProbElement.EnumerateArray())
+                //    {
+                //        LogProbability logProbability = new LogProbability();
 
-                        if (logProbItem.TryGetProperty("logprob", out var logProbValue))
-                        {
-                            logProbability.Value = logProbValue.GetDouble();
-                        }
+                //        if (logProbItem.TryGetProperty("logprob", out var logProbValue))
+                //        {
+                //            logProbability.Value = logProbValue.GetDouble();
+                //        }
 
-                        if (logProbItem.TryGetProperty("token", out var tokenValue))
-                        {
-                            logProbability.Token = tokenValue.GetString();
-                        }
+                //        if (logProbItem.TryGetProperty("token", out var tokenValue))
+                //        {
+                //            logProbability.Token = tokenValue.GetString();
+                //        }
 
-                        if (logProbItem.TryGetProperty("bytes", out var bytesValue) && bytesValue.ValueKind == JsonValueKind.Array)
-                        {
-                            List<byte> bytesList = new List<byte>();
-                            foreach (var byteItem in bytesValue.EnumerateArray())
-                            {
-                                if (byteItem.TryGetByte(out var byteVal))
-                                {
-                                    bytesList.Add(byteVal);
-                                }
-                            }
-                            logProbability.Bytes = bytesList;
-                        }
-                    }
+                //        if (logProbItem.TryGetProperty("bytes", out var bytesValue) && bytesValue.ValueKind == JsonValueKind.Array)
+                //        {
+                //            List<byte> bytesList = new List<byte>();
+                //            foreach (var byteItem in bytesValue.EnumerateArray())
+                //            {
+                //                if (byteItem.TryGetByte(out var byteVal))
+                //                {
+                //                    bytesList.Add(byteVal);
+                //                }
+                //            }
+                //            logProbability.Bytes = bytesList;
+                //        }
+                //    }
 
-                    realtimeServerInputAudioTranscriptionMessage.LogProbabilities = logProbabilities;
-                }
+                //    realtimeServerInputAudioTranscriptionMessage.LogProbabilities = logProbabilities;
+                //}
 
                 if (root.TryGetProperty("usage", out var usageElement) &&
                     usageElement.TryGetProperty("type", out var usageTypeElement) &&

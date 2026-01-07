@@ -11,7 +11,7 @@
     <PackageReference Include="Microsoft.Extensions.Configuration" Version="10.0.0" />
     <PackageReference Include="Microsoft.Extensions.Configuration.UserSecrets" Version="10.0.0" />
     <PackageReference Include="NAudio" Version="2.1.0" />
-    <PackageReference Include="Microsoft.Extensions.AI.Abstractions" Version="10.0.0-dev" />
+    <PackageReference Include="Microsoft.Extensions.AI.Abstractions" Version="10.2.0-dev" />
   </ItemGroup>
   <ItemGroup>
     <None Update="Resources\microphone.png">
