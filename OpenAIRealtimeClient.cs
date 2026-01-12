@@ -365,358 +365,97 @@ namespace RealtimePlayGround
             // Start a task to process incoming client messages
             var processUpdatesTask = Task.Run(async () =>
             {
-                try
+            try
+            {
+                await foreach (var message in updates.WithCancellation(cancellationToken))
                 {
-                    await foreach (var message in updates.WithCancellation(cancellationToken))
+                    JsonObject? jsonMessage = new JsonObject();
+
+                    if (message.EventId is not null)
                     {
-                        JsonObject? jsonMessage = new JsonObject();
+                        jsonMessage["event_id"] = message.EventId;
+                    }
 
-                        if (message.EventId is not null)
-                        {
-                            jsonMessage["event_id"] = message.EventId;
-                        }
+                    // Handle different RealtimeClientMessage types
+                    switch (message)
+                    {
+                        case RealtimeClientResponseCreateMessage responseCreate:
+                            jsonMessage["type"] = "response.create";
 
-                        // Handle different RealtimeClientMessage types
-                        switch (message)
-                        {
-                            case RealtimeClientResponseCreateMessage responseCreate:
-                                jsonMessage["type"] = "response.create";
+                            var responseObj = new JsonObject();
 
-                                var responseObj = new JsonObject();
+                            // Handle OutputAudioOptions (audio.output.format)
+                            if (responseCreate.OutputAudioOptions is not null)
+                            {
+                                var audioObj = new JsonObject();
+                                var outputObj = new JsonObject();
+                                var formatObj = new JsonObject();
 
-                                // Handle OutputAudioOptions (audio.output.format)
-                                if (responseCreate.OutputAudioOptions is not null)
+                                switch (responseCreate.OutputAudioOptions.Type)
                                 {
-                                    var audioObj = new JsonObject();
-                                    var outputObj = new JsonObject();
-                                    var formatObj = new JsonObject();
-
-                                    switch (responseCreate.OutputAudioOptions.Type)
-                                    {
-                                        case "audio/pcm":
-                                            if (responseCreate.OutputAudioOptions.SampleRate == 24000)
-                                            {
-                                                formatObj["type"] = responseCreate.OutputAudioOptions.Type;
-                                                formatObj["rate"] = 24000;
-                                            }
-                                            break;
-
-                                        case "audio/pcmu": // The G.711 μ-law format
+                                    case "audio/pcm":
+                                        if (responseCreate.OutputAudioOptions.SampleRate == 24000)
+                                        {
                                             formatObj["type"] = responseCreate.OutputAudioOptions.Type;
-                                            break;
-
-                                        case "audio/pcma": // The G.711 A-law format.
-                                            formatObj["type"] = responseCreate.OutputAudioOptions.Type;
-                                            break;
-                                    }
-
-                                    outputObj["format"] = formatObj;
-
-                                    if (!string.IsNullOrEmpty(responseCreate.OutputVoice))
-                                    {
-                                        outputObj["voice"] = responseCreate.OutputVoice;
-                                    }
-
-                                    // Handle OutputVoice (audio.output.voice)
-
-                                    audioObj["output"] = outputObj;
-                                    responseObj["audio"] = audioObj;
-                                }
-                                else if (!string.IsNullOrEmpty(responseCreate.OutputVoice))
-                                {
-                                    // OutputVoice without OutputAudioOptions
-                                    responseObj["audio"] = new JsonObject
-                                    {
-                                        ["output"] = new JsonObject
-                                        {
-                                            ["voice"] = responseCreate.OutputVoice
+                                            formatObj["rate"] = 24000;
                                         }
-                                    };
+                                        break;
+
+                                    case "audio/pcmu": // The G.711 μ-law format
+                                        formatObj["type"] = responseCreate.OutputAudioOptions.Type;
+                                        break;
+
+                                    case "audio/pcma": // The G.711 A-law format.
+                                        formatObj["type"] = responseCreate.OutputAudioOptions.Type;
+                                        break;
                                 }
 
-                                // Handle conversation
-                                if (responseCreate.ExcludeFromConversation)
+                                outputObj["format"] = formatObj;
+
+                                if (!string.IsNullOrEmpty(responseCreate.OutputVoice))
                                 {
-                                    responseObj["conversation"] = "none";
-                                }
-                                else
-                                {
-                                    responseObj["conversation"] = "auto";
+                                    outputObj["voice"] = responseCreate.OutputVoice;
                                 }
 
-                                // Handle Items (input)
-                                if (responseCreate.Items != null && responseCreate.Items.Any())
+                                // Handle OutputVoice (audio.output.voice)
+
+                                audioObj["output"] = outputObj;
+                                responseObj["audio"] = audioObj;
+                            }
+                            else if (!string.IsNullOrEmpty(responseCreate.OutputVoice))
+                            {
+                                // OutputVoice without OutputAudioOptions
+                                responseObj["audio"] = new JsonObject
                                 {
-                                    var inputArray = new JsonArray();
-                                    foreach (var item in responseCreate.Items)
+                                    ["output"] = new JsonObject
                                     {
-                                        if (item is RealtimeContentItem contentItem && contentItem.Content is not null)
-                                        {
-                                            var itemObj = new JsonObject
-                                            {
-                                                ["type"] = "message",
-                                                ["object"] = "realtime.item"
-                                            };
-
-                                            if (contentItem.Role.HasValue)
-                                            {
-                                                itemObj["role"] = contentItem.Role.Value.Value;
-                                            }
-
-                                            if (contentItem.Id is not null)
-                                            {
-                                                itemObj["id"] = contentItem.Id;
-                                            }
-
-                                            if (contentItem.Content is TextContent textContent)
-                                            {
-                                                itemObj["content"] = new JsonArray
-                                                {
-                                                    new JsonObject
-                                                    {
-                                                        ["type"] = "input_text",
-                                                        ["text"] = textContent.Text
-                                                    }
-                                                };
-
-                                                inputArray.Add(itemObj);
-                                                continue;
-                                            }
-                                            else if (contentItem.Content is DataContent audioContent && audioContent.MediaType.StartsWith("audio/"))
-                                            {
-                                                itemObj["content"] = new JsonArray
-                                                {
-                                                    new JsonObject
-                                                    {
-                                                        ["type"] = "input_audio",
-                                                        ["audio"] = audioContent.Base64Data.ToString()
-                                                    }
-                                                };
-
-                                                inputArray.Add(itemObj);
-                                                continue;
-                                            }
-                                            else if (contentItem.Content is DataContent imageContent && imageContent.MediaType.StartsWith("image/"))
-                                            {
-                                                itemObj["content"] = new JsonArray
-                                                {
-                                                    new JsonObject
-                                                    {
-                                                        ["type"] = "input_image",
-                                                        ["image"] = imageContent.Base64Data.ToString()
-                                                    }
-                                                };
-
-                                                inputArray.Add(itemObj);
-                                                continue;
-                                            }
-                                        }
+                                        ["voice"] = responseCreate.OutputVoice
                                     }
+                                };
+                            }
 
-                                    // To do: Support other content types as needed
+                            // Handle conversation
+                            if (responseCreate.ExcludeFromConversation)
+                            {
+                                responseObj["conversation"] = "none";
+                            }
+                            else
+                            {
+                                responseObj["conversation"] = "auto";
+                            }
 
-                                    responseObj["input"] = inputArray;
-                                }
-
-                                // Handle Instructions
-                                if (!string.IsNullOrEmpty(responseCreate.Instructions))
+                            // Handle Items (input)
+                            if (responseCreate.Items != null && responseCreate.Items.Any())
+                            {
+                                var inputArray = new JsonArray();
+                                foreach (var item in responseCreate.Items)
                                 {
-                                    responseObj["instructions"] = responseCreate.Instructions;
-                                }
-
-                                // Handle MaxOutputTokens
-                                if (responseCreate.MaxOutputTokens.HasValue)
-                                {
-                                    responseObj["max_output_tokens"] = responseCreate.MaxOutputTokens.Value;
-                                }
-
-                                // Handle Metadata
-                                if (responseCreate.Metadata is not null && responseCreate.Metadata.Count > 0)
-                                {
-                                    var metadataObj = new JsonObject();
-                                    foreach (var kvp in responseCreate.Metadata)
-                                    {
-                                        metadataObj[kvp.Key] = JsonValue.Create(kvp.Value);
-                                    }
-                                    responseObj["metadata"] = metadataObj;
-                                }
-
-                                // Handle OutputModalities
-                                if (responseCreate.OutputModalities is not null && responseCreate.OutputModalities.Any())
-                                {
-                                    var modalitiesArray = new JsonArray();
-                                    foreach (var modality in responseCreate.OutputModalities)
-                                    {
-                                        modalitiesArray.Add(modality);
-                                    }
-                                    responseObj["output_modalities"] = modalitiesArray;
-                                }
-
-                                // Handle PromptTemplate
-                                //if (responseCreate.PromptTemplate is not null && !string.IsNullOrEmpty(responseCreate.PromptTemplate.Id))
-                                //{
-                                //    var promptObj = new JsonObject
-                                //    {
-                                //        ["id"] = responseCreate.PromptTemplate.Id
-                                //    };
-
-                                //    if (responseCreate.PromptTemplate.Variables is not null && responseCreate.PromptTemplate.Variables.Count > 0)
-                                //    {
-                                //        var variablesObj = new JsonObject();
-                                //        foreach (var kvp in responseCreate.PromptTemplate.Variables)
-                                //        {
-                                //            variablesObj[kvp.Key] = JsonValue.Create(kvp.Value);
-                                //        }
-                                //        promptObj["variables"] = variablesObj;
-                                //    }
-
-                                //    if (!string.IsNullOrEmpty(responseCreate.PromptTemplate.Version))
-                                //    {
-                                //        promptObj["version"] = responseCreate.PromptTemplate.Version;
-                                //    }
-
-                                //    responseObj["prompt"] = promptObj;
-                                //}
-
-                                // Handle Function Tool Name
-                                if (!string.IsNullOrEmpty(responseCreate.FunctionToolName))
-                                {
-                                    responseObj["tool_choice"] = new JsonObject
-                                    {
-                                        ["type"] = "function",
-                                        ["name"] = responseCreate.FunctionToolName
-                                    };
-                                }
-                                else if (!string.IsNullOrEmpty(responseCreate.McpToolName) && !string.IsNullOrEmpty(responseCreate.McpToolServerLabel))
-                                {
-                                    // Handle MCP Tool
-
-                                    var mcpToolChoice = new JsonObject
-                                    {
-                                        ["type"] = "mcp"
-                                    };
-
-                                    mcpToolChoice["server_label"] = responseCreate.McpToolServerLabel;
-                                    mcpToolChoice["name"] = responseCreate.McpToolName;
-                                    responseObj["tool_choice"] = mcpToolChoice;
-                                }
-                                else if (responseCreate.ToolChoiceMode.HasValue)
-                                {
-                                    switch (responseCreate.ToolChoiceMode.Value)
-                                    {
-                                        case ToolChoiceMode.None:
-                                            responseObj["tool_choice"] = "none";
-                                            break;
-                                        case ToolChoiceMode.Auto:
-                                            responseObj["tool_choice"] = "auto";
-                                            break;
-                                        case ToolChoiceMode.Required:
-                                            responseObj["tool_choice"] = "required";
-                                            break;
-                                    }
-                                }
-
-                                // Handle Tools
-                                if (responseCreate.Tools is not null && responseCreate.Tools.Any())
-                                {
-                                    var toolsArray = new JsonArray();
-
-                                    foreach (var tool in responseCreate.Tools)
-                                    {
-                                        var toolObj = new JsonObject();
-
-                                        // Check if it's an AIFunction
-                                        if (tool is AIFunction aiFunction)
-                                        {
-                                            toolObj["type"] = "function";
-
-                                            // Get function name
-                                            if (!string.IsNullOrEmpty(aiFunction.Name))
-                                            {
-                                                toolObj["name"] = aiFunction.Name;
-                                            }
-
-                                            // Get description
-                                            if (!string.IsNullOrEmpty(aiFunction.Description))
-                                            {
-                                                toolObj["description"] = aiFunction.Description;
-                                            }
-
-                                            // Get parameters schema - AIFunction doesn't expose this directly
-                                            // We need to serialize the AIFunction and extract the schema
-                                            var functionJson = JsonSerializer.SerializeToNode(aiFunction);
-                                            if (functionJson?["parameters"] is not null)
-                                            {
-                                                toolObj["parameters"] = functionJson["parameters"];
-                                            }
-                                        }
-                                        // Check if it's an MCP tool - serialize the tool and extract MCP properties
-                                        else
-                                        {
-                                            // Serialize the entire tool to get all properties
-                                            var toolJson = JsonSerializer.SerializeToNode(tool);
-
-                                            // Check if the serialized JSON has MCP properties
-                                            if (toolJson is not null)
-                                            {
-                                                // Check if it has MCP-specific properties
-                                                if (toolJson["server_label"] is not null || toolJson["server_url"] is not null || toolJson["connector_id"] is not null)
-                                                {
-                                                    toolObj["type"] = "mcp";
-
-                                                    // Copy all MCP-related properties from the serialized JSON
-                                                    if (toolJson["server_label"] is not null)
-                                                        toolObj["server_label"] = toolJson["server_label"];
-
-                                                    if (toolJson["server_url"] is not null)
-                                                        toolObj["server_url"] = toolJson["server_url"];
-
-                                                    if (toolJson["connector_id"] is not null)
-                                                        toolObj["connector_id"] = toolJson["connector_id"];
-
-                                                    if (toolJson["authorization"] is not null)
-                                                        toolObj["authorization"] = toolJson["authorization"];
-
-                                                    if (toolJson["headers"] is not null)
-                                                        toolObj["headers"] = toolJson["headers"];
-
-                                                    if (toolJson["require_approval"] is not null)
-                                                        toolObj["require_approval"] = toolJson["require_approval"];
-
-                                                    if (toolJson["server_description"] is not null)
-                                                        toolObj["server_description"] = toolJson["server_description"];
-
-                                                    if (toolJson["allowed_tools"] is not null)
-                                                        toolObj["allowed_tools"] = toolJson["allowed_tools"];
-                                                }
-                                            }
-                                        }
-
-                                        toolsArray.Add(toolObj);
-                                    }
-
-                                    responseObj["tools"] = toolsArray;
-                                }
-
-                                jsonMessage["response"] = responseObj;
-                                break;
-
-                            case RealtimeClientConversationItemCreateMessage itemCreate:
-                                if (itemCreate.Item is not null)
-                                {
-                                    jsonMessage["type"] = "conversation.item.create";
-
-                                    if (itemCreate.PreviousId is not null)
-                                    {
-                                        jsonMessage["previous_item_id"] = itemCreate.PreviousId;
-                                    }
-
-                                    if (itemCreate.Item is RealtimeContentItem contentItem && contentItem.Content is not null)
+                                    if (item is RealtimeContentItem contentItem && contentItem.Contents is not null)
                                     {
                                         var itemObj = new JsonObject
                                         {
                                             ["type"] = "message",
-                                            // ["object"] = "realtime.item"
+                                            ["object"] = "realtime.item"
                                         };
 
                                         if (contentItem.Role.HasValue)
@@ -729,92 +468,350 @@ namespace RealtimePlayGround
                                             itemObj["id"] = contentItem.Id;
                                         }
 
-                                        if (contentItem.Content is TextContent textContent)
+                                        JsonArray contentsArray = new JsonArray();
+
+                                        foreach (var content in contentItem.Contents)
                                         {
-                                            itemObj["content"] = new JsonArray
+                                            if (content is TextContent textContent)
                                             {
+                                                contentsArray.Add(
+                                                    new JsonObject
+                                                    {
+                                                        ["type"] = "input_text",
+                                                        ["text"] = textContent.Text
+                                                    });
+
+                                                continue;
+                                            }
+                                            else if (content is DataContent audioContent && audioContent.MediaType.StartsWith("audio/"))
+                                            {
+                                                contentsArray.Add(
+                                                    new JsonObject
+                                                    {
+                                                        ["type"] = "input_audio",
+                                                        ["audio"] = audioContent.Base64Data.ToString()
+                                                    });
+
+                                                continue;
+                                            }
+                                            else if (content is DataContent imageContent && imageContent.MediaType.StartsWith("image/"))
+                                            {
+                                                contentsArray.Add(
+                                                    new JsonObject
+                                                    {
+                                                        ["type"] = "input_image",
+                                                        ["image"] = imageContent.Base64Data.ToString()
+                                                    });
+
+                                                continue;
+                                            }
+                                        }
+
+                                        itemObj["content"] = contentsArray;
+                                        inputArray.Add(itemObj);
+                                        continue;
+                                    }
+                                }
+
+                                // To do: Support other content types as needed
+                                responseObj["input"] = inputArray;
+                            }
+
+                            // Handle Instructions
+                            if (!string.IsNullOrEmpty(responseCreate.Instructions))
+                            {
+                                responseObj["instructions"] = responseCreate.Instructions;
+                            }
+
+                            // Handle MaxOutputTokens
+                            if (responseCreate.MaxOutputTokens.HasValue)
+                            {
+                                responseObj["max_output_tokens"] = responseCreate.MaxOutputTokens.Value;
+                            }
+
+                            // Handle Metadata
+                            if (responseCreate.Metadata is not null && responseCreate.Metadata.Count > 0)
+                            {
+                                var metadataObj = new JsonObject();
+                                foreach (var kvp in responseCreate.Metadata)
+                                {
+                                    metadataObj[kvp.Key] = JsonValue.Create(kvp.Value);
+                                }
+                                responseObj["metadata"] = metadataObj;
+                            }
+
+                            // Handle OutputModalities
+                            if (responseCreate.OutputModalities is not null && responseCreate.OutputModalities.Any())
+                            {
+                                var modalitiesArray = new JsonArray();
+                                foreach (var modality in responseCreate.OutputModalities)
+                                {
+                                    modalitiesArray.Add(modality);
+                                }
+                                responseObj["output_modalities"] = modalitiesArray;
+                            }
+
+                            // Handle PromptTemplate
+                            //if (responseCreate.PromptTemplate is not null && !string.IsNullOrEmpty(responseCreate.PromptTemplate.Id))
+                            //{
+                            //    var promptObj = new JsonObject
+                            //    {
+                            //        ["id"] = responseCreate.PromptTemplate.Id
+                            //    };
+
+                            //    if (responseCreate.PromptTemplate.Variables is not null && responseCreate.PromptTemplate.Variables.Count > 0)
+                            //    {
+                            //        var variablesObj = new JsonObject();
+                            //        foreach (var kvp in responseCreate.PromptTemplate.Variables)
+                            //        {
+                            //            variablesObj[kvp.Key] = JsonValue.Create(kvp.Value);
+                            //        }
+                            //        promptObj["variables"] = variablesObj;
+                            //    }
+
+                            //    if (!string.IsNullOrEmpty(responseCreate.PromptTemplate.Version))
+                            //    {
+                            //        promptObj["version"] = responseCreate.PromptTemplate.Version;
+                            //    }
+
+                            //    responseObj["prompt"] = promptObj;
+                            //}
+
+                            // Handle Function Tool Name
+                            if (!string.IsNullOrEmpty(responseCreate.FunctionToolName))
+                            {
+                                responseObj["tool_choice"] = new JsonObject
+                                {
+                                    ["type"] = "function",
+                                    ["name"] = responseCreate.FunctionToolName
+                                };
+                            }
+                            else if (!string.IsNullOrEmpty(responseCreate.McpToolName) && !string.IsNullOrEmpty(responseCreate.McpToolServerLabel))
+                            {
+                                // Handle MCP Tool
+
+                                var mcpToolChoice = new JsonObject
+                                {
+                                    ["type"] = "mcp"
+                                };
+
+                                mcpToolChoice["server_label"] = responseCreate.McpToolServerLabel;
+                                mcpToolChoice["name"] = responseCreate.McpToolName;
+                                responseObj["tool_choice"] = mcpToolChoice;
+                            }
+                            else if (responseCreate.ToolChoiceMode.HasValue)
+                            {
+                                switch (responseCreate.ToolChoiceMode.Value)
+                                {
+                                    case ToolChoiceMode.None:
+                                        responseObj["tool_choice"] = "none";
+                                        break;
+                                    case ToolChoiceMode.Auto:
+                                        responseObj["tool_choice"] = "auto";
+                                        break;
+                                    case ToolChoiceMode.Required:
+                                        responseObj["tool_choice"] = "required";
+                                        break;
+                                }
+                            }
+
+                            // Handle Tools
+                            if (responseCreate.Tools is not null && responseCreate.Tools.Any())
+                            {
+                                var toolsArray = new JsonArray();
+
+                                foreach (var tool in responseCreate.Tools)
+                                {
+                                    var toolObj = new JsonObject();
+
+                                    // Check if it's an AIFunction
+                                    if (tool is AIFunction aiFunction)
+                                    {
+                                        toolObj["type"] = "function";
+
+                                        // Get function name
+                                        if (!string.IsNullOrEmpty(aiFunction.Name))
+                                        {
+                                            toolObj["name"] = aiFunction.Name;
+                                        }
+
+                                        // Get description
+                                        if (!string.IsNullOrEmpty(aiFunction.Description))
+                                        {
+                                            toolObj["description"] = aiFunction.Description;
+                                        }
+
+                                        // Get parameters schema - AIFunction doesn't expose this directly
+                                        // We need to serialize the AIFunction and extract the schema
+                                        var functionJson = JsonSerializer.SerializeToNode(aiFunction);
+                                        if (functionJson?["parameters"] is not null)
+                                        {
+                                            toolObj["parameters"] = functionJson["parameters"];
+                                        }
+                                    }
+                                    // Check if it's an MCP tool - serialize the tool and extract MCP properties
+                                    else
+                                    {
+                                        // Serialize the entire tool to get all properties
+                                        var toolJson = JsonSerializer.SerializeToNode(tool);
+
+                                        // Check if the serialized JSON has MCP properties
+                                        if (toolJson is not null)
+                                        {
+                                            // Check if it has MCP-specific properties
+                                            if (toolJson["server_label"] is not null || toolJson["server_url"] is not null || toolJson["connector_id"] is not null)
+                                            {
+                                                toolObj["type"] = "mcp";
+
+                                                // Copy all MCP-related properties from the serialized JSON
+                                                if (toolJson["server_label"] is not null)
+                                                    toolObj["server_label"] = toolJson["server_label"];
+
+                                                if (toolJson["server_url"] is not null)
+                                                    toolObj["server_url"] = toolJson["server_url"];
+
+                                                if (toolJson["connector_id"] is not null)
+                                                    toolObj["connector_id"] = toolJson["connector_id"];
+
+                                                if (toolJson["authorization"] is not null)
+                                                    toolObj["authorization"] = toolJson["authorization"];
+
+                                                if (toolJson["headers"] is not null)
+                                                    toolObj["headers"] = toolJson["headers"];
+
+                                                if (toolJson["require_approval"] is not null)
+                                                    toolObj["require_approval"] = toolJson["require_approval"];
+
+                                                if (toolJson["server_description"] is not null)
+                                                    toolObj["server_description"] = toolJson["server_description"];
+
+                                                if (toolJson["allowed_tools"] is not null)
+                                                    toolObj["allowed_tools"] = toolJson["allowed_tools"];
+                                            }
+                                        }
+                                    }
+
+                                    toolsArray.Add(toolObj);
+                                }
+
+                                responseObj["tools"] = toolsArray;
+                            }
+
+                            jsonMessage["response"] = responseObj;
+                            break;
+
+                        case RealtimeClientConversationItemCreateMessage itemCreate:
+                            if (itemCreate.Item is not null)
+                            {
+                                jsonMessage["type"] = "conversation.item.create";
+
+                                if (itemCreate.PreviousId is not null)
+                                {
+                                    jsonMessage["previous_item_id"] = itemCreate.PreviousId;
+                                }
+
+                                if (itemCreate.Item is RealtimeContentItem contentItem && contentItem.Contents is not null)
+                                {
+                                    var itemObj = new JsonObject
+                                    {
+                                        ["type"] = "message",
+                                        // ["object"] = "realtime.item"
+                                    };
+
+                                    if (contentItem.Role.HasValue)
+                                    {
+                                        itemObj["role"] = contentItem.Role.Value.Value;
+                                    }
+
+                                    if (contentItem.Id is not null)
+                                    {
+                                        itemObj["id"] = contentItem.Id;
+                                    }
+
+                                    JsonArray contentsArray = new JsonArray();
+                                    foreach (var content in contentItem.Contents)
+                                    {
+                                        if (content is TextContent textContent)
+                                        {
+                                            contentsArray.Add(
                                                 new JsonObject
                                                 {
                                                     ["type"] = "input_text",
                                                     ["text"] = textContent.Text
-                                                }
-                                            };
+                                                });
                                         }
-                                        else if (contentItem.Content is DataContent audioContent && audioContent.MediaType.StartsWith("audio/"))
+                                        else if (content is DataContent audioContent && audioContent.MediaType.StartsWith("audio/"))
                                         {
-                                            itemObj["content"] = new JsonArray
-                                            {
+                                            contentsArray.Add(
                                                 new JsonObject
                                                 {
                                                     ["type"] = "input_audio",
                                                     ["audio"] = audioContent.Base64Data.ToString()
-                                                }
-                                            };
+                                                });
                                         }
-                                        else if (contentItem.Content is DataContent imageContent && imageContent.MediaType.StartsWith("image/"))
+                                        else if (content is DataContent imageContent && imageContent.MediaType.StartsWith("image/"))
                                         {
-                                            itemObj["content"] = new JsonArray
-                                            {
+                                            contentsArray.Add(
                                                 new JsonObject
                                                 {
                                                     ["type"] = "input_image",
                                                     ["image_url"] = imageContent.Uri
-                                                }
-                                            };
+                                                });
                                         }
-
-                                        jsonMessage["item"] = itemObj;
                                     }
 
+                                    itemObj["content"] = contentsArray;
+                                    jsonMessage["item"] = itemObj;
                                     // To do: Support other content types as needed
                                 }
-                                break;
+                            }
+                            break;
 
-                            case RealtimeClientInputAudioBufferAppendMessage audioAppend:
-                                if (audioAppend.Content is not null && audioAppend.Content.MediaType.StartsWith("audio/"))
+                        case RealtimeClientInputAudioBufferAppendMessage audioAppend:
+                            if (audioAppend.Content is not null && audioAppend.Content.MediaType.StartsWith("audio/"))
+                            {
+                                jsonMessage["type"] = "input_audio_buffer.append";
+
+                                // DataContent is created with "data:audio/pcm;base64,<data>" format
+                                // Extract the Uri property and get the base64 part after the comma
+                                string dataUri = audioAppend.Content.Uri?.ToString() ?? string.Empty;
+                                string base64Data;
+
+                                int commaIndex = dataUri.LastIndexOf(',');
+                                if (commaIndex >= 0 && commaIndex < dataUri.Length - 1)
                                 {
-                                    jsonMessage["type"] = "input_audio_buffer.append";
-
-                                    // DataContent is created with "data:audio/pcm;base64,<data>" format
-                                    // Extract the Uri property and get the base64 part after the comma
-                                    string dataUri = audioAppend.Content.Uri?.ToString() ?? string.Empty;
-                                    string base64Data;
-
-                                    int commaIndex = dataUri.LastIndexOf(',');
-                                    if (commaIndex >= 0 && commaIndex < dataUri.Length - 1)
-                                    {
-                                        // Extract everything after the last comma
-                                        base64Data = dataUri.Substring(commaIndex + 1);
-                                    }
-                                    else
-                                    {
-                                        // Fallback: try to get raw data directly
-                                        base64Data = Convert.ToBase64String(audioAppend.Content.Data.ToArray());
-                                    }
-
-                                    jsonMessage["audio"] = base64Data;
+                                    // Extract everything after the last comma
+                                    base64Data = dataUri.Substring(commaIndex + 1);
                                 }
-                                break;
-
-                            case RealtimeClientInputAudioBufferCommitMessage audioCommit:
-                                jsonMessage["type"] = "input_audio_buffer.commit";
-                                break;
-
-                            default:
-                                if (message.RawRepresentation is not null)
+                                else
                                 {
-                                    if (message.RawRepresentation is string rawString)
-                                    {
-                                        // For raw string content, parse it directly
-                                        jsonMessage = JsonSerializer.Deserialize<JsonObject>(rawString);
-                                    }
-                                    else if (message.RawRepresentation is JsonObject rawJsonObject)
-                                    {
-                                        // For raw JsonObject content, use it directly
-                                        jsonMessage = rawJsonObject;
-                                    }
+                                    // Fallback: try to get raw data directly
+                                    base64Data = Convert.ToBase64String(audioAppend.Content.Data.ToArray());
                                 }
-                                break;
+
+                                jsonMessage["audio"] = base64Data;
+                            }
+                            break;
+
+                        case RealtimeClientInputAudioBufferCommitMessage audioCommit:
+                            jsonMessage["type"] = "input_audio_buffer.commit";
+                            break;
+
+                        default:
+                            if (message.RawRepresentation is not null)
+                            {
+                                if (message.RawRepresentation is string rawString)
+                                {
+                                    // For raw string content, parse it directly
+                                    jsonMessage = JsonSerializer.Deserialize<JsonObject>(rawString);
+                                }
+                                else if (message.RawRepresentation is JsonObject rawJsonObject)
+                                {
+                                    // For raw JsonObject content, use it directly
+                                    jsonMessage = rawJsonObject;
+                                }
+                            }
+                            break;
                         }
 
                         if (jsonMessage is not null && jsonMessage.TryGetPropertyValue("type", out var _))
@@ -1505,19 +1502,19 @@ namespace RealtimePlayGround
                             string? contentType = contentTypeElement.GetString();
                             if (contentType == "input_text" && contentTypeElement.TryGetProperty("text", out var textElement))
                             {
-                                outputItems.Add(new RealtimeContentItem(new TextContent(textElement.GetString()), id, chatRole));
+                                outputItems.Add(new RealtimeContentItem(new [] { new TextContent(textElement.GetString()) }, id, chatRole));
                             }
                             else if (contentType == "input_text" && contentTypeElement.TryGetProperty("transcript", out var transcriptElement))
                             {
-                                outputItems.Add(new RealtimeContentItem(new TextContent(transcriptElement.GetString()), id, chatRole));
+                                outputItems.Add(new RealtimeContentItem(new [] { new TextContent(transcriptElement.GetString()) }, id, chatRole));
                             }
                             else if (contentType == "input_audio" &&  contentTypeElement.TryGetProperty("audio", out var audioDataElement) )
                             {
-                                outputItems.Add(new RealtimeContentItem(new DataContent($"data:audio/pcm;base64,{audioDataElement.GetString()}"), id, chatRole));
+                                outputItems.Add(new RealtimeContentItem(new[] { new DataContent($"data:audio/pcm;base64,{audioDataElement.GetString()}") }, id, chatRole));
                             }
                             else if (contentType == "input_image" &&  contentTypeElement.TryGetProperty("image_url", out var imageUrlElement) )
                             {
-                                outputItems.Add(new RealtimeContentItem(new DataContent(imageUrlElement.GetString()!), id, chatRole));
+                                outputItems.Add(new RealtimeContentItem(new[] { new DataContent(imageUrlElement.GetString()!) }, id, chatRole));
                             }
                         }
                     }

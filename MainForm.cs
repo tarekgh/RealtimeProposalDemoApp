@@ -998,7 +998,7 @@ namespace RealtimePlayGround
                     {
                         // Create conversation item with text
                         var contentItem = new RealtimeContentItem(
-                            new TextContent(text),
+                            new[] { new TextContent(text) },
                             id: null,
                             role: ChatRole.User
                         );
@@ -1100,7 +1100,7 @@ namespace RealtimePlayGround
                     {
                         // Create conversation item with image
                         var contentItem = new RealtimeContentItem(
-                            new DataContent($"data:{mimeType};base64,{base64Image}"),
+                            new [] { new DataContent($"data:{mimeType};base64,{base64Image}") },
                             id: null,
                             role: ChatRole.User
                         );
