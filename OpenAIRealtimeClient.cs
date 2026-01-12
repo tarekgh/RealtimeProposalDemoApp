@@ -578,15 +578,16 @@ namespace RealtimePlayGround
                             //}
 
                             // Handle Function Tool Name
-                            if (!string.IsNullOrEmpty(responseCreate.FunctionToolName))
+                            if (responseCreate.AIFunction is not null)
                             {
                                 responseObj["tool_choice"] = new JsonObject
                                 {
                                     ["type"] = "function",
-                                    ["name"] = responseCreate.FunctionToolName
+                                    ["name"] = responseCreate.AIFunction.Name
                                 };
                             }
-                            else if (!string.IsNullOrEmpty(responseCreate.McpToolName) && !string.IsNullOrEmpty(responseCreate.McpToolServerLabel))
+                            else if (responseCreate.HostedMcpServerTool is not null)
+                                    // !string.IsNullOrEmpty(responseCreate.McpToolName) && !string.IsNullOrEmpty(responseCreate.McpToolServerLabel))
                             {
                                 // Handle MCP Tool
 
@@ -595,8 +596,8 @@ namespace RealtimePlayGround
                                     ["type"] = "mcp"
                                 };
 
-                                mcpToolChoice["server_label"] = responseCreate.McpToolServerLabel;
-                                mcpToolChoice["name"] = responseCreate.McpToolName;
+                                mcpToolChoice["server_label"] = responseCreate.HostedMcpServerTool.ServerName;
+                                mcpToolChoice["name"] = responseCreate.HostedMcpServerTool.Name;
                                 responseObj["tool_choice"] = mcpToolChoice;
                             }
                             else if (responseCreate.ToolChoiceMode.HasValue)
