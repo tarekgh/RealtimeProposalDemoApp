@@ -801,7 +801,7 @@ namespace RealtimePlayGround
                                 break;
 
                             default:
-                                if (message.Type is RealtimeClientMessageType.RawContentOnly && message.RawRepresentation is not null)
+                                if (message.RawRepresentation is not null)
                                 {
                                     if (message.RawRepresentation is string rawString)
                                     {
@@ -1434,6 +1434,19 @@ namespace RealtimePlayGround
                         if (inputTokenDetailsElement.TryGetProperty("text_tokens", out var textTokensElement))
                         {
                             usageData.InputTextTokenCount = textTokensElement.GetInt32();
+                        }
+                    }
+
+                    if (usageElement.TryGetProperty("output_token_details", out var outputTokenDetailsElement))
+                    {
+                        if (outputTokenDetailsElement.TryGetProperty("audio_tokens", out var audioTokensElement))
+                        {
+                            usageData.OutputAudioTokenCount = audioTokensElement.GetInt32();
+                        }
+
+                        if (outputTokenDetailsElement.TryGetProperty("text_tokens", out var textTokensElement))
+                        {
+                            usageData.OutputTextTokenCount = textTokensElement.GetInt32();
                         }
                     }
 
