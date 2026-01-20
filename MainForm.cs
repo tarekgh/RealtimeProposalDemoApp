@@ -1,5 +1,7 @@
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using NAudio.Wave;
 using System;
 using System.Collections.Generic;
@@ -638,13 +640,52 @@ namespace RealtimePlayGround
                 _realtimeClient = new OpenAIRealtimeClient(apiKey);
 
                 statusLabel.Text = "Connecting to OpenAI...";
-                _realtimeSession = await _realtimeClient.CreateSessionAsync();
-                if (_realtimeSession == null)
+                var session = await _realtimeClient.CreateSessionAsync();
+                if (session == null)
                 {
                     WriteErrorToRichTextBox("Failed to connect to OpenAI.");
                     statusLabel.Text = "Connection failed.";
                     return;
                 }
+
+                // Define a function that can be called by the AI
+                AIFunction getWeatherFunction = AIFunctionFactory.Create(
+                    (string location) =>
+                        location switch
+                        {
+                            "Seattle" => $"The weather in {location} is rainy, 55°F",
+                            "New York" => $"The weather in {location} is cloudy, 70°F",
+                            "San Francisco" => $"The weather in {location} is foggy, 60°F",
+                            _ => $"Sorry, I don't have weather data for {location}."
+                        },
+                    "GetWeather",
+                    "Gets the current weather for a given location");
+
+                //// Set up services (optional)
+                var services = new ServiceCollection()
+                    .AddLogging()
+                    .BuildServiceProvider();
+
+                var builder = new RealtimeSessionBuilder(session!)
+                    .UseFunctionInvocation(configure: functionSession =>
+                    {
+                        // Add tools that can be invoked
+                        functionSession.AdditionalTools = [getWeatherFunction];
+
+                        // Optional configuration
+                        functionSession.MaximumIterationsPerRequest = 10;
+                        functionSession.AllowConcurrentInvocation = true;
+                        functionSession.IncludeDetailedErrors = false;
+                    });
+
+                //// Build the session with function invocation enabled
+                _realtimeSession = builder.Build(services);
+
+                //// Update session options to include tools
+                //await _realtimeSession.UpdateAsync(new RealtimeSessionOptions
+                //{
+                //    Tools = [getWeatherFunction]
+                //});
 
                 // Session is created, update UI
                 _isCallActive = true;
@@ -685,6 +726,7 @@ namespace RealtimePlayGround
                     {
                         CreateResponse = true,
                     },
+                    Tools = [getWeatherFunction]
                 });
             }
             catch (Exception ex)
@@ -781,6 +823,42 @@ namespace RealtimePlayGround
                             {
                                 richTextBoxEvents?.AppendText($"Usage - Input: {responseMessage.Usage.InputTokenCount}, Output: {responseMessage.Usage.OutputTokenCount}\n");
                             }
+                            break;
+
+                        case RealtimeServerResponseOutputItemMessage responseMessage:
+                            if (responseMessage.Item is RealtimeContentItem contentItem)
+                            {
+                                foreach (var content in contentItem.Contents)
+                                {
+                                    if (content is FunctionCallContent functionCall)
+                                    {
+                                        if (functionCall.Arguments != null)
+                                        {
+                                            var argsList = new List<string>();
+                                            foreach (var arg in functionCall.Arguments)
+                                            {
+                                                argsList.Add($"({arg.Key}, {arg.Value?.ToString()})");
+                                            }
+                                            richTextBoxEvents?.AppendText($"Function Call: {functionCall.Name} with arguments {string.Join(", ", argsList)}\n");
+                                        }
+                                        else
+                                        {
+                                            richTextBoxEvents?.AppendText($"Function Call: {functionCall.Name} with no arguments\n");
+                                        }
+                                    }
+                                }
+                            }
+                            break;
+
+                        default:
+                            if (serverMessage.RawRepresentation is not null)
+                            {
+                                if (serverMessage.RawRepresentation is JsonElement rawElement && rawElement.TryGetProperty("type", out var typeProperty))
+                                {
+                                    richTextBoxEvents?.AppendText($"{serverMessage.Type} ... {typeProperty} \n");
+                                }
+                            }
+                            // Handle other message types as needed
                             break;
                     }
                 }
