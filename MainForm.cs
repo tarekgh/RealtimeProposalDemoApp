@@ -129,15 +129,15 @@ namespace RealtimePlayGround
             if (!_isRecording)
             {
                 btnRecord.Enabled = false; // Disable to prevent double-clicks
-                StartRecording();
+                _ = StartRecordingAsync(); // Fire and forget but properly named
             }
             else
             {
-                StopRecording();
+                _ = StopRecordingAsync();
             }
         }
 
-        private async void StartRecording()
+        private async Task StartRecordingAsync()
         {
             try
             {
@@ -175,9 +175,13 @@ namespace RealtimePlayGround
                     throw new InvalidOperationException("No recording devices found. Please connect a microphone.");
                 }
 
+                // Log device info for debugging
+                var deviceInfo = WaveInEvent.GetCapabilities(0);
+                System.Diagnostics.Debug.WriteLine($"Recording device: {deviceInfo.ProductName}, Channels: {deviceInfo.Channels}");
+
                 // Try different sample rates until one works
-                // int[] sampleRates = { 24000, 44100, 48000, 16000, 22050, 8000 };
-                int[] sampleRates = { 24000 };
+                int[] sampleRates = { 24000, 44100, 48000, 16000, 22050, 8000 };
+                List<string> attemptedRates = new List<string>();
                 Exception? lastException = null;
 
                 foreach (var sampleRate in sampleRates)
@@ -190,7 +194,7 @@ namespace RealtimePlayGround
                         // Initialize WaveIn
                         _waveIn = new WaveInEvent
                         {
-                            DeviceNumber = 0, // Use default device
+                            DeviceNumber = 0,
                             WaveFormat = _recordingFormat,
                             BufferMilliseconds = 100
                         };
@@ -198,27 +202,34 @@ namespace RealtimePlayGround
                         // Create WAV file writer
                         _waveFileWriter = new WaveFileWriter(_audioFilePath, _recordingFormat);
 
-                        // Hook up event and start
-                        _waveIn.DataAvailable += OnDataAvailable;
-
-                        await Task.Delay(150);
-
-                        _waveIn.StartRecording();
-
-                        // Mark as recording only after successful start
+                        // Mark as recording BEFORE hooking events to avoid race condition
                         _isRecording = true;
 
+                        // Hook up events
+                        _waveIn.DataAvailable += OnDataAvailable;
+                        _waveIn.RecordingStopped += OnRecordingStopped;
+
+                        // Start recording immediately - no delay needed before
+                        _waveIn.StartRecording();
+
+                        // Small delay to verify it started
+                        await Task.Delay(50);
+
+                        // Update UI on success
                         if (_muteIcon != null)
                             btnRecord.Image = _muteIcon;
 
                         trackSpeed.Enabled = false;
-                        btnRecord.Enabled = true; // Re-enable button
+                        btnRecord.Enabled = true;
 
                         statusLabel.Text = $"Recording ({sampleRate}Hz)...";
+                        System.Diagnostics.Debug.WriteLine($"Recording started successfully at {sampleRate}Hz");
                         return; // Success!
                     }
                     catch (Exception ex)
                     {
+                        _isRecording = false;
+                        attemptedRates.Add($"{sampleRate}Hz: {ex.Message}");
                         lastException = ex;
                         StopAndDisposeWaveIn();
                         CleanupRecordingResources();
@@ -226,7 +237,8 @@ namespace RealtimePlayGround
                 }
 
                 // If we get here, none of the sample rates worked
-                throw lastException ?? new InvalidOperationException("Failed to initialize recording with any sample rate.");
+                string attemptDetails = string.Join("\n", attemptedRates);
+                throw new InvalidOperationException($"Failed to initialize recording with any sample rate.\n\nAttempts:\n{attemptDetails}", lastException);
             }
             catch (Exception ex)
             {
@@ -235,16 +247,22 @@ namespace RealtimePlayGround
                 CleanupRecordingResources();
                 MessageBox.Show($"Error starting recording: {ex.Message}\n\nPlease check:\n1. Microphone is connected\n2. Windows microphone permissions are enabled\n3. Microphone is not in use by another app", "Recording Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 statusLabel.Text = "Ready to record.";
+
+                if (_microphoneIcon != null)
+                    btnRecord.Image = _microphoneIcon;
+                btnRecord.Enabled = true;
             }
-            finally
+        }
+
+        private void OnRecordingStopped(object? sender, StoppedEventArgs e)
+        {
+            if (e.Exception != null)
             {
-                // Ensure button state is correct
-                if (!_isRecording)
+                System.Diagnostics.Debug.WriteLine($"Recording stopped with error: {e.Exception.Message}");
+                BeginInvoke(new Action(() =>
                 {
-                    if (_microphoneIcon != null)
-                        btnRecord.Image = _microphoneIcon;
-                    btnRecord.Enabled = true; // Re-enable button on failure
-                }
+                    statusLabel.Text = $"Recording error: {e.Exception.Message}";
+                }));
             }
         }
 
@@ -254,8 +272,9 @@ namespace RealtimePlayGround
             {
                 try
                 {
-                    // Unhook event first to prevent any callbacks during cleanup
+                    // Unhook events first to prevent any callbacks during cleanup
                     _waveIn.DataAvailable -= OnDataAvailable;
+                    _waveIn.RecordingStopped -= OnRecordingStopped;
 
                     // Stop recording if active
                     _waveIn.StopRecording();
@@ -328,7 +347,7 @@ namespace RealtimePlayGround
             }
         }
 
-        private async void StopRecording()
+        private async Task StopRecordingAsync()
         {
             try
             {
