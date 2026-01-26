@@ -12,10 +12,14 @@ namespace RealtimePlayGround
         private System.Windows.Forms.RichTextBox richTextBox1;
         private System.Windows.Forms.RichTextBox richTextBoxEvents;
         private System.Windows.Forms.RichTextBox richTextBox2;
+        private System.Windows.Forms.RichTextBox richTextBoxLogs;
         private System.Windows.Forms.Label lblVoice;
         private System.Windows.Forms.ComboBox cmbVoice;
         private System.Windows.Forms.Label lblSpeed;
         private System.Windows.Forms.TrackBar trackSpeed;
+        private System.Windows.Forms.Label lblLogLevel;
+        private System.Windows.Forms.ComboBox cmbLogLevel;
+        private System.Windows.Forms.SplitContainer splitContainer2;
 
         protected override void Dispose(bool disposing)
         {
@@ -34,18 +38,26 @@ namespace RealtimePlayGround
             this.btnSend = new System.Windows.Forms.Button();
             this.statusLabel = new System.Windows.Forms.Label();
             this.splitContainer1 = new System.Windows.Forms.SplitContainer();
+            this.splitContainer2 = new System.Windows.Forms.SplitContainer();
             this.richTextBox1 = new System.Windows.Forms.RichTextBox();
             this.richTextBoxEvents = new System.Windows.Forms.RichTextBox();
+            this.richTextBoxLogs = new System.Windows.Forms.RichTextBox();
             this.richTextBox2 = new System.Windows.Forms.RichTextBox();
             this.lblVoice = new System.Windows.Forms.Label();
             this.cmbVoice = new System.Windows.Forms.ComboBox();
             this.lblSpeed = new System.Windows.Forms.Label();
             this.trackSpeed = new System.Windows.Forms.TrackBar();
+            this.lblLogLevel = new System.Windows.Forms.Label();
+            this.cmbLogLevel = new System.Windows.Forms.ComboBox();
             ((System.ComponentModel.ISupportInitialize)(this.splitContainer1)).BeginInit();
+            ((System.ComponentModel.ISupportInitialize)(this.splitContainer2)).BeginInit();
             ((System.ComponentModel.ISupportInitialize)(this.trackSpeed)).BeginInit();
             this.splitContainer1.Panel1.SuspendLayout();
             this.splitContainer1.Panel2.SuspendLayout();
             this.splitContainer1.SuspendLayout();
+            this.splitContainer2.Panel1.SuspendLayout();
+            this.splitContainer2.Panel2.SuspendLayout();
+            this.splitContainer2.SuspendLayout();
             this.SuspendLayout();
             //
             // btnRecord
@@ -138,6 +150,41 @@ namespace RealtimePlayGround
             this.trackSpeed.TabIndex = 12;
             this.trackSpeed.Value = 1;
             this.trackSpeed.ValueChanged += new System.EventHandler(this.trackSpeed_ValueChanged);
+
+            //
+            // lblLogLevel
+            //
+            this.lblLogLevel.AutoSize = true;
+            this.lblLogLevel.Font = new System.Drawing.Font("Segoe UI", 10F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point);
+            this.lblLogLevel.Location = new System.Drawing.Point(12, 260);
+            this.lblLogLevel.Name = "lblLogLevel";
+            this.lblLogLevel.Size = new System.Drawing.Size(66, 19);
+            this.lblLogLevel.TabIndex = 13;
+            this.lblLogLevel.Text = "Log Level";
+            
+            //
+            // cmbLogLevel
+            //
+
+            this.cmbLogLevel.DropDownStyle = System.Windows.Forms.ComboBoxStyle.DropDownList;
+            this.cmbLogLevel.Font = new System.Drawing.Font("Segoe UI", 10F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point);
+            this.cmbLogLevel.FormattingEnabled = true;
+            this.cmbLogLevel.Location = new System.Drawing.Point(12, 282);
+            this.cmbLogLevel.Name = "cmbLogLevel";
+            this.cmbLogLevel.Size = new System.Drawing.Size(62, 25);
+            this.cmbLogLevel.TabIndex = 14;
+            this.cmbLogLevel.Items.AddRange(new object[] 
+            {
+                "Trace",
+                "Debug",
+                "Information",
+                "Warning",
+                "Error",
+                "Critical",
+                "None"
+            });
+            this.cmbLogLevel.SelectedIndex = 6;
+
             //
             // statusLabel
             //
@@ -188,10 +235,27 @@ namespace RealtimePlayGround
             //
             // splitContainer1.Panel2
             //
-            this.splitContainer1.Panel2.Controls.Add(this.richTextBoxEvents);
+            this.splitContainer1.Panel2.Controls.Add(this.splitContainer2);
             this.splitContainer1.Size = new System.Drawing.Size(508, 250);
             this.splitContainer1.SplitterDistance = 254;
             this.splitContainer1.TabIndex = 7;
+            //
+            // splitContainer2
+            //
+            this.splitContainer2.Dock = System.Windows.Forms.DockStyle.Fill;
+            this.splitContainer2.Orientation = System.Windows.Forms.Orientation.Horizontal;
+            this.splitContainer2.Name = "splitContainer2";
+            //
+            // splitContainer2.Panel1
+            //
+            this.splitContainer2.Panel1.Controls.Add(this.richTextBoxEvents);
+            //
+            // splitContainer2.Panel2
+            //
+            this.splitContainer2.Panel2.Controls.Add(this.richTextBoxLogs);
+            this.splitContainer2.Size = new System.Drawing.Size(250, 250);
+            this.splitContainer2.SplitterDistance = 125;
+            this.splitContainer2.TabIndex = 0;
             //
             // richTextBox1
             //
@@ -208,15 +272,28 @@ namespace RealtimePlayGround
             this.richTextBoxEvents.Dock = System.Windows.Forms.DockStyle.Fill;
             this.richTextBoxEvents.Location = new System.Drawing.Point(0, 0);
             this.richTextBoxEvents.Name = "richTextBoxEvents";
-            this.richTextBoxEvents.Size = new System.Drawing.Size(250, 250);
+            this.richTextBoxEvents.Size = new System.Drawing.Size(250, 125);
             this.richTextBoxEvents.TabIndex = 0;
             this.richTextBoxEvents.Text = "";
+            //
+            // richTextBoxLogs
+            //
+            this.richTextBoxLogs.Dock = System.Windows.Forms.DockStyle.Fill;
+            this.richTextBoxLogs.Font = new System.Drawing.Font("Consolas", 9F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point);
+            this.richTextBoxLogs.Location = new System.Drawing.Point(0, 0);
+            this.richTextBoxLogs.Name = "richTextBoxLogs";
+            this.richTextBoxLogs.ReadOnly = true;
+            this.richTextBoxLogs.Size = new System.Drawing.Size(250, 121);
+            this.richTextBoxLogs.TabIndex = 0;
+            this.richTextBoxLogs.Text = "";
             //
             // MainForm
             //
             this.AutoScaleDimensions = new System.Drawing.SizeF(7F, 15F);
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
             this.ClientSize = new System.Drawing.Size(600, 385);
+            this.Controls.Add(this.cmbLogLevel);
+            this.Controls.Add(this.lblLogLevel);
             this.Controls.Add(this.trackSpeed);
             this.Controls.Add(this.lblSpeed);
             this.Controls.Add(this.cmbVoice);
@@ -236,6 +313,10 @@ namespace RealtimePlayGround
             this.splitContainer1.Panel2.ResumeLayout(false);
             ((System.ComponentModel.ISupportInitialize)(this.splitContainer1)).EndInit();
             this.splitContainer1.ResumeLayout(false);
+            this.splitContainer2.Panel1.ResumeLayout(false);
+            this.splitContainer2.Panel2.ResumeLayout(false);
+            ((System.ComponentModel.ISupportInitialize)(this.splitContainer2)).EndInit();
+            this.splitContainer2.ResumeLayout(false);
             ((System.ComponentModel.ISupportInitialize)(this.trackSpeed)).EndInit();
             this.ResumeLayout(false);
             this.PerformLayout();

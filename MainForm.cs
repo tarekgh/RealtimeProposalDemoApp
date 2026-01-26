@@ -642,6 +642,31 @@ namespace RealtimePlayGround
             }
         }
 
+        private LogLevel GetSelectedLogLevel()
+        {
+            int selectedIndex = 6; // Default to None
+            if (cmbLogLevel.InvokeRequired)
+            {
+                selectedIndex = (int)cmbLogLevel.Invoke(new Func<int>(() => cmbLogLevel.SelectedIndex));
+            }
+            else
+            {
+                selectedIndex = cmbLogLevel.SelectedIndex;
+            }
+
+            return selectedIndex switch
+            {
+                0 => LogLevel.Trace,
+                1 => LogLevel.Debug,
+                2 => LogLevel.Information,
+                3 => LogLevel.Warning,
+                4 => LogLevel.Error,
+                5 => LogLevel.Critical,
+                6 => LogLevel.None,
+                _ => LogLevel.None
+            };
+        }
+
         private async Task StartCallAsync()
         {
             try
@@ -680,9 +705,13 @@ namespace RealtimePlayGround
                     "GetWeather",
                     "Gets the current weather for a given location");
 
-                //// Set up services (optional)
+                // Set up services with RichTextBox logging
                 var services = new ServiceCollection()
-                    .AddLogging()
+                    .AddLogging(builder =>
+                    {
+                        builder.SetMinimumLevel(GetSelectedLogLevel());
+                        builder.AddRichTextBox(richTextBoxLogs, GetSelectedLogLevel);
+                    })
                     .BuildServiceProvider();
 
                 var builder = new RealtimeSessionBuilder(session!)
@@ -695,7 +724,8 @@ namespace RealtimePlayGround
                         functionSession.MaximumIterationsPerRequest = 10;
                         functionSession.AllowConcurrentInvocation = true;
                         functionSession.IncludeDetailedErrors = false;
-                    });
+                    })
+                    .UseLogging();
 
                 //// Build the session with function invocation enabled
                 _realtimeSession = builder.Build(services);
@@ -715,6 +745,8 @@ namespace RealtimePlayGround
                 richTextBox2.Enabled = true;
                 // cmbVoice.Enabled = false;
                 trackSpeed.Enabled = true;
+                cmbLogLevel.Enabled = false;  // Disable log level selection during active session
+                cmbVoice.Enabled = false;  // Disable voice selection during active session
                 statusLabel.Text = "Connected to OpenAI Realtime.";
 
                 // Get selected voice
@@ -736,7 +768,7 @@ namespace RealtimePlayGround
 
                 await _realtimeSession.UpdateAsync(new RealtimeSessionOptions
                 {
-                    OutputModalities = [ "audio" ],
+                    OutputModalities = ["audio"],
                     Instructions = "You are a funny chat bot.",
                     Voice = selectedVoice,
                     VoiceSpeed = speedValue,
@@ -917,6 +949,8 @@ namespace RealtimePlayGround
                 if (_startCallIcon != null)
                     btnCall.Image = _startCallIcon;
                 statusLabel.Text = "Call ended.";
+                cmbLogLevel.Enabled = true;  // Re-enable log level selection when session ends
+                cmbVoice.Enabled = true;  // Re-enable voice selection when session ends
             }
             catch (Exception ex)
             {
@@ -1197,7 +1231,7 @@ namespace RealtimePlayGround
                     {
                         // Create conversation item with image
                         var contentItem = new RealtimeContentItem(
-                            new [] { new DataContent($"data:{mimeType};base64,{base64Image}") },
+                            new[] { new DataContent($"data:{mimeType};base64,{base64Image}") },
                             id: null,
                             role: ChatRole.User
                         );
@@ -1311,6 +1345,11 @@ namespace RealtimePlayGround
             _startCallIcon?.Dispose();
             _hangUpIcon?.Dispose();
             _realtimeClient?.Dispose();
+        }
+
+        private void cmbLogLevel_SelectedIndexChanged(object sender, EventArgs e)
+        {
+
         }
     }
 }
