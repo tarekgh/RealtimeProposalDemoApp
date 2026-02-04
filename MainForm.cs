@@ -5,8 +5,12 @@ using Microsoft.Extensions.Logging;
 using NAudio.Wave;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
+using System.Diagnostics.Metrics;
 using System.IO;
+using System.Linq;
 using System.Net.Http;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Threading;
@@ -18,7 +22,7 @@ namespace RealtimePlayGround
 {
     public partial class MainForm : Form
     {
-        private WaveInEvent? _waveIn;
+        private WaveIn? _waveIn;
         private WaveOutEvent? _waveOut;
         private AudioFileReader? _audioFileReader;
         private bool _isRecording = false;
@@ -37,11 +41,215 @@ namespace RealtimePlayGround
         private BufferedWaveProvider? _audioProvider;
         private Channel<RealtimeClientMessage>? _clientMessageChannel;
         private CancellationTokenSource? _streamingCancellationTokenSource;
+        private ActivityListener? _activityListener;
+        private MeterListener? _meterListener;
+        private readonly object _recordingLock = new();
+        private int _selectedDeviceNumber = 0;
+        private int _workingSampleRate = 44100;
 
         public MainForm()
         {
             InitializeComponent();
             LoadIcons();
+            SetupTelemetryListeners();
+            InitializeAudioDevice();
+        }
+
+        private void InitializeAudioDevice()
+        {
+            // Find and validate available recording devices at startup
+            try
+            {
+                int deviceCount = WaveIn.DeviceCount;
+                System.Diagnostics.Debug.WriteLine($"Found {deviceCount} recording devices");
+                
+                if (deviceCount > 0)
+                {
+                    // List all devices
+                    for (int i = 0; i < deviceCount; i++)
+                    {
+                        var capabilities = WaveIn.GetCapabilities(i);
+                        System.Diagnostics.Debug.WriteLine($"Audio device {i}: {capabilities.ProductName}, Channels: {capabilities.Channels}");
+                    }
+
+                    // Use device 0 (default)
+                    _selectedDeviceNumber = 0;
+                    var selectedDevice = WaveIn.GetCapabilities(_selectedDeviceNumber);
+                    statusLabel.Text = $"Ready. Device: {selectedDevice.ProductName}";
+                    
+                    // Test which sample rate works
+                    TestSampleRates();
+                }
+                else
+                {
+                    statusLabel.Text = "No microphone detected.";
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Error initializing audio device: {ex.Message}");
+                statusLabel.Text = "Error detecting microphone.";
+            }
+        }
+
+        private void TestSampleRates()
+        {
+            // Test sample rates at startup to find one that works
+            int[] sampleRates = [44100, 48000, 16000, 24000, 22050, 8000];
+            
+            foreach (var rate in sampleRates)
+            {
+                try
+                {
+                    using var testWaveIn = new WaveIn
+                    {
+                        DeviceNumber = _selectedDeviceNumber,
+                        WaveFormat = new WaveFormat(rate, 16, 1)
+                    };
+                    // If we get here without exception, this rate works
+                    _workingSampleRate = rate;
+                    System.Diagnostics.Debug.WriteLine($"Sample rate {rate}Hz works for this device");
+                    return;
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Sample rate {rate}Hz failed: {ex.Message}");
+                }
+            }
+        }
+
+        private void SetupTelemetryListeners()
+        {
+            // Set up ActivityListener to capture Activity stop events
+            _activityListener = new ActivityListener
+            {
+                // Listen to activities from Microsoft.Extensions.AI sources
+                ShouldListenTo = source => source.Name.StartsWith("Microsoft.Extensions.AI") ||
+                                           source.Name.StartsWith("OpenAI") ||
+                                           source.Name.StartsWith("Experimental.Microsoft.Extensions.AI"),
+                Sample = (ref ActivityCreationOptions<ActivityContext> options) => ActivitySamplingResult.AllDataAndRecorded,
+                ActivityStopped = activity =>
+                {
+                    WriteActivityToLog(activity);
+                }
+            };
+            ActivitySource.AddActivityListener(_activityListener);
+
+            // Set up MeterListener to capture metrics
+            _meterListener = new MeterListener();
+            _meterListener.InstrumentPublished = (instrument, listener) =>
+            {
+                // Listen to metrics from Microsoft.Extensions.AI sources
+                if (instrument.Meter.Name.StartsWith("Microsoft.Extensions.AI") ||
+                    instrument.Meter.Name.StartsWith("OpenAI") ||
+                    instrument.Meter.Name.StartsWith("Experimental.Microsoft.Extensions.AI"))
+                {
+                    listener.EnableMeasurementEvents(instrument);
+                }
+            };
+
+            // Handle different measurement types
+            _meterListener.SetMeasurementEventCallback<long>(OnMeasurementRecorded);
+            _meterListener.SetMeasurementEventCallback<int>(OnMeasurementRecorded);
+            _meterListener.SetMeasurementEventCallback<double>(OnMeasurementRecorded);
+            _meterListener.SetMeasurementEventCallback<float>(OnMeasurementRecorded);
+
+            _meterListener.Start();
+        }
+
+        private void WriteActivityToLog(Activity activity)
+        {
+            if (richTextBoxLogs == null || richTextBoxLogs.IsDisposed)
+                return;
+
+            var sb = new StringBuilder();
+            sb.AppendLine($"[Activity] {activity.OperationName}");
+            sb.AppendLine($"  Duration: {activity.Duration.TotalMilliseconds:F2}ms");
+            sb.AppendLine($"  Status: {activity.Status}");
+
+            if (activity.Tags.Any())
+            {
+                sb.AppendLine("  Tags:");
+                foreach (var tag in activity.Tags)
+                {
+                    // Truncate long values for readability
+                    var value = tag.Value?.Length > 100 ? tag.Value[..100] + "..." : tag.Value;
+                    sb.AppendLine($"    {tag.Key}: {value}");
+                }
+            }
+
+            if (activity.Events.Any())
+            {
+                sb.AppendLine("  Events:");
+                foreach (var evt in activity.Events)
+                {
+                    sb.AppendLine($"    {evt.Name} @ {evt.Timestamp:HH:mm:ss.fff}");
+                    foreach (var evtTag in evt.Tags)
+                    {
+                        var value = evtTag.Value?.ToString();
+                        if (value?.Length > 100)
+                            value = value[..100] + "...";
+                        sb.AppendLine($"      {evtTag.Key}: {value}");
+                    }
+                }
+            }
+
+            WriteToLogRichTextBox(sb.ToString(), System.Drawing.Color.Purple);
+        }
+
+        private void OnMeasurementRecorded<T>(Instrument instrument, T measurement, ReadOnlySpan<KeyValuePair<string, object?>> tags, object? state)
+        {
+            var sb = new StringBuilder();
+            sb.Append($"[Metric] {instrument.Meter.Name}/{instrument.Name}: {measurement} {instrument.Unit}");
+
+            if (tags.Length > 0)
+            {
+                sb.Append(" | Tags: ");
+                var tagStrings = new List<string>();
+                foreach (var tag in tags)
+                {
+                    tagStrings.Add($"{tag.Key}={tag.Value}");
+                }
+                sb.Append(string.Join(", ", tagStrings));
+            }
+
+            WriteToLogRichTextBox(sb.ToString(), System.Drawing.Color.Teal);
+        }
+
+        private void WriteToLogRichTextBox(string message, System.Drawing.Color color)
+        {
+            if (richTextBoxLogs == null || richTextBoxLogs.IsDisposed)
+                return;
+
+            if (richTextBoxLogs.InvokeRequired)
+            {
+                richTextBoxLogs.BeginInvoke(() => AppendLogText(message, color));
+            }
+            else
+            {
+                AppendLogText(message, color);
+            }
+        }
+
+        private void AppendLogText(string message, System.Drawing.Color color)
+        {
+            try
+            {
+                if (richTextBoxLogs.IsDisposed)
+                    return;
+
+                int startIndex = richTextBoxLogs.TextLength;
+                richTextBoxLogs.AppendText(message + Environment.NewLine);
+                richTextBoxLogs.Select(startIndex, message.Length);
+                richTextBoxLogs.SelectionColor = color;
+                richTextBoxLogs.Select(richTextBoxLogs.TextLength, 0);
+                richTextBoxLogs.SelectionColor = richTextBoxLogs.ForeColor;
+                richTextBoxLogs.ScrollToCaret();
+            }
+            catch (ObjectDisposedException)
+            {
+                // Control was disposed, ignore
+            }
         }
 
         private void LoadIcons()
@@ -128,141 +336,206 @@ namespace RealtimePlayGround
         {
             if (!_isRecording)
             {
-                btnRecord.Enabled = false; // Disable to prevent double-clicks
-                _ = StartRecordingAsync(); // Fire and forget but properly named
+                StartRecording();
             }
             else
             {
-                _ = StopRecordingAsync();
+                StopRecording();
             }
         }
 
-        private async Task StartRecordingAsync()
+        private void StartRecording()
         {
             try
             {
+                btnRecord.Enabled = false;
                 btnPlay.Enabled = false;
 
-                // Stop playback immediately and completely
-                try
-                {
-                    // Clean up any existing recording
-                    StopAndDisposeWaveIn();
-                    CleanupRecordingResources();
+                // Clean up any existing resources
+                StopAndDisposeWaveIn();
+                CleanupRecordingResources();
 
-                    if (_audioFileReader != null)
-                    {
-                        _audioFileReader.Dispose();
-                        _audioFileReader = null;
-                    }
-
-                    if (_startPlayIcon != null)
-                        btnPlay.Image = _startPlayIcon;
-                }
-                catch
+                // Stop playback if playing
+                if (_waveOut?.PlaybackState == PlaybackState.Playing)
                 {
+                    _waveOut.Stop();
                 }
 
-                statusLabel.Text = "Initializing recording...";
+                statusLabel.Text = "Starting recording...";
 
                 // Prepare file path
                 _audioFilePath = Path.Combine(Path.GetTempPath(), $"recorded_audio_{DateTime.Now:yyyyMMdd_HHmmss}.wav");
 
                 // Check available devices
-                int deviceCount = WaveInEvent.DeviceCount;
+                int deviceCount = WaveIn.DeviceCount;
                 if (deviceCount == 0)
                 {
-                    throw new InvalidOperationException("No recording devices found. Please connect a microphone.");
+                    throw new InvalidOperationException("No recording devices found.");
                 }
 
-                // Log device info for debugging
-                var deviceInfo = WaveInEvent.GetCapabilities(0);
-                System.Diagnostics.Debug.WriteLine($"Recording device: {deviceInfo.ProductName}, Channels: {deviceInfo.Channels}");
+                // Configure recording format using the working sample rate
+                _recordingFormat = new WaveFormat(_workingSampleRate, 16, 1);
 
-                // Try different sample rates until one works
-                int[] sampleRates = { 24000, 44100, 48000, 16000, 22050, 8000 };
-                List<string> attemptedRates = new List<string>();
-                Exception? lastException = null;
-
-                foreach (var sampleRate in sampleRates)
+                // Use WaveIn (callback-based, works better with Windows Forms)
+                _waveIn = new WaveIn
                 {
-                    try
-                    {
-                        // Configure recording format
-                        _recordingFormat = new WaveFormat(sampleRate, 16, 1);
+                    DeviceNumber = _selectedDeviceNumber,
+                    WaveFormat = _recordingFormat,
+                    BufferMilliseconds = 100,
+                    NumberOfBuffers = 3
+                };
 
-                        // Initialize WaveIn
-                        _waveIn = new WaveInEvent
-                        {
-                            DeviceNumber = 0,
-                            WaveFormat = _recordingFormat,
-                            BufferMilliseconds = 100
-                        };
+                // Create WAV file writer
+                _waveFileWriter = new WaveFileWriter(_audioFilePath, _recordingFormat);
 
-                        // Create WAV file writer
-                        _waveFileWriter = new WaveFileWriter(_audioFilePath, _recordingFormat);
+                // Hook up the data available event
+                _waveIn.DataAvailable += WaveIn_DataAvailable;
+                _waveIn.RecordingStopped += WaveIn_RecordingStopped;
 
-                        // Mark as recording BEFORE hooking events to avoid race condition
-                        _isRecording = true;
+                // Start recording
+                _waveIn.StartRecording();
+                _isRecording = true;
 
-                        // Hook up events
-                        _waveIn.DataAvailable += OnDataAvailable;
-                        _waveIn.RecordingStopped += OnRecordingStopped;
+                // Update UI
+                if (_muteIcon != null)
+                    btnRecord.Image = _muteIcon;
+                
+                trackSpeed.Enabled = false;
+                btnRecord.Enabled = true;
 
-                        // Start recording immediately - no delay needed before
-                        _waveIn.StartRecording();
-
-                        // Small delay to verify it started
-                        await Task.Delay(50);
-
-                        // Update UI on success
-                        if (_muteIcon != null)
-                            btnRecord.Image = _muteIcon;
-
-                        trackSpeed.Enabled = false;
-                        btnRecord.Enabled = true;
-
-                        statusLabel.Text = $"Recording ({sampleRate}Hz)...";
-                        System.Diagnostics.Debug.WriteLine($"Recording started successfully at {sampleRate}Hz");
-                        return; // Success!
-                    }
-                    catch (Exception ex)
-                    {
-                        _isRecording = false;
-                        attemptedRates.Add($"{sampleRate}Hz: {ex.Message}");
-                        lastException = ex;
-                        StopAndDisposeWaveIn();
-                        CleanupRecordingResources();
-                    }
-                }
-
-                // If we get here, none of the sample rates worked
-                string attemptDetails = string.Join("\n", attemptedRates);
-                throw new InvalidOperationException($"Failed to initialize recording with any sample rate.\n\nAttempts:\n{attemptDetails}", lastException);
+                statusLabel.Text = $"Recording at {_workingSampleRate}Hz... Speak now!";
+                System.Diagnostics.Debug.WriteLine($"Recording started at {_workingSampleRate}Hz");
             }
             catch (Exception ex)
             {
                 _isRecording = false;
                 StopAndDisposeWaveIn();
                 CleanupRecordingResources();
-                MessageBox.Show($"Error starting recording: {ex.Message}\n\nPlease check:\n1. Microphone is connected\n2. Windows microphone permissions are enabled\n3. Microphone is not in use by another app", "Recording Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                statusLabel.Text = "Ready to record.";
 
+                MessageBox.Show(
+                    $"Error starting recording: {ex.Message}\n\nPlease check:\n" +
+                    "1. Microphone is connected\n" +
+                    "2. Microphone permissions are enabled\n" +
+                    "3. No other app is using the microphone",
+                    "Recording Error",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error);
+
+                statusLabel.Text = "Recording failed.";
                 if (_microphoneIcon != null)
                     btnRecord.Image = _microphoneIcon;
                 btnRecord.Enabled = true;
             }
         }
 
-        private void OnRecordingStopped(object? sender, StoppedEventArgs e)
+        private void WaveIn_DataAvailable(object? sender, WaveInEventArgs e)
+        {
+            try
+            {
+                if (_waveFileWriter != null && e.BytesRecorded > 0)
+                {
+                    _waveFileWriter.Write(e.Buffer, 0, e.BytesRecorded);
+
+                    // Calculate peak level for visual feedback
+                    float maxLevel = 0;
+                    for (int i = 0; i < e.BytesRecorded - 1; i += 2)
+                    {
+                        short sample = (short)(e.Buffer[i] | (e.Buffer[i + 1] << 8));
+                        float level = Math.Abs(sample / 32768f);
+                        if (level > maxLevel) maxLevel = level;
+                    }
+
+                    // Update UI (throttled)
+                    long length = _waveFileWriter.Length;
+                    if (length % 8000 < e.BytesRecorded)
+                    {
+                        BeginInvoke(() =>
+                        {
+                            string indicator = maxLevel > 0.05f ? "🔊 Sound detected" : "🎤 Listening...";
+                            statusLabel.Text = $"Recording... {length / 1024}KB | {indicator}";
+                        });
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Error in DataAvailable: {ex.Message}");
+            }
+        }
+
+        private void WaveIn_RecordingStopped(object? sender, StoppedEventArgs e)
         {
             if (e.Exception != null)
             {
                 System.Diagnostics.Debug.WriteLine($"Recording stopped with error: {e.Exception.Message}");
-                BeginInvoke(new Action(() =>
+                BeginInvoke(() =>
                 {
                     statusLabel.Text = $"Recording error: {e.Exception.Message}";
-                }));
+                });
+            }
+        }
+
+        private void StopRecording()
+        {
+            try
+            {
+                btnRecord.Enabled = false;
+                statusLabel.Text = "Stopping recording...";
+
+                _isRecording = false;
+
+                // Stop and dispose WaveIn
+                StopAndDisposeWaveIn();
+
+                // Close the file writer
+                CleanupRecordingResources();
+
+                // Reset button
+                if (_microphoneIcon != null)
+                    btnRecord.Image = _microphoneIcon;
+
+                // Re-enable speed control if session is active
+                if (_isCallActive)
+                    trackSpeed.Enabled = true;
+
+                btnRecord.Enabled = true;
+
+                // Check file
+                if (File.Exists(_audioFilePath))
+                {
+                    var fileInfo = new FileInfo(_audioFilePath);
+                    long audioBytes = fileInfo.Length - 44; // Subtract WAV header
+
+                    if (audioBytes > 0)
+                    {
+                        btnPlay.Enabled = true;
+                        statusLabel.Text = $"Recorded {audioBytes / 1024}KB of audio.";
+
+                        // Send to API if connected
+                        if (_realtimeSession != null && _isCallActive)
+                        {
+                            _ = SendAudioToAPIAsync();
+                        }
+                    }
+                    else
+                    {
+                        statusLabel.Text = "No audio captured. Check microphone.";
+                        btnPlay.Enabled = false;
+                    }
+                }
+                else
+                {
+                    statusLabel.Text = "Recording failed - no file created.";
+                    btnPlay.Enabled = false;
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Error stopping recording: {ex.Message}");
+                statusLabel.Text = "Error stopping recording.";
+                btnRecord.Enabled = true;
+                if (_microphoneIcon != null)
+                    btnRecord.Image = _microphoneIcon;
             }
         }
 
@@ -272,17 +545,14 @@ namespace RealtimePlayGround
             {
                 try
                 {
-                    // Unhook events first to prevent any callbacks during cleanup
-                    _waveIn.DataAvailable -= OnDataAvailable;
-                    _waveIn.RecordingStopped -= OnRecordingStopped;
-
-                    // Stop recording if active
+                    _waveIn.DataAvailable -= WaveIn_DataAvailable;
+                    _waveIn.RecordingStopped -= WaveIn_RecordingStopped;
                     _waveIn.StopRecording();
-
-                    // Give it a moment to finish
-                    System.Threading.Thread.Sleep(100);
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Error stopping WaveIn: {ex.Message}");
+                }
                 finally
                 {
                     try
@@ -302,123 +572,18 @@ namespace RealtimePlayGround
                 try
                 {
                     _waveFileWriter.Flush();
-                    _waveFileWriter.Close();
                     _waveFileWriter.Dispose();
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Error closing file writer: {ex.Message}");
+                }
                 finally
                 {
                     _waveFileWriter = null;
                 }
             }
             _recordingFormat = null;
-        }
-
-        private void OnDataAvailable(object? sender, WaveInEventArgs e)
-        {
-            try
-            {
-                if (_waveFileWriter != null && e.BytesRecorded > 0)
-                {
-                    _waveFileWriter.Write(e.Buffer, 0, e.BytesRecorded);
-
-                    // Update UI safely
-                    if (InvokeRequired)
-                    {
-                        BeginInvoke(new Action(() =>
-                        {
-                            statusLabel.Text = $"Recording... {_waveFileWriter.Length} bytes";
-                        }));
-                    }
-                    else
-                    {
-                        statusLabel.Text = $"Recording... {_waveFileWriter.Length} bytes";
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                // Log error but don't crash the recording thread
-                System.Diagnostics.Debug.WriteLine($"Error writing audio data: {ex.Message}");
-                BeginInvoke(new Action(() =>
-                {
-                    statusLabel.Text = $"Recording error: {ex.Message}";
-                }));
-            }
-        }
-
-        private async Task StopRecordingAsync()
-        {
-            try
-            {
-                _isRecording = false;
-
-                if (_waveIn == null)
-                {
-                    // Reset UI even if waveIn is null
-                    if (_microphoneIcon != null)
-                        btnRecord.Image = _microphoneIcon;
-                    statusLabel.Text = "Ready to record.";
-                    return;
-                }
-
-                // Stop recording
-                StopAndDisposeWaveIn();
-                await Task.Delay(200);
-
-                // Ensure file is closed
-                CleanupRecordingResources();
-                await Task.Delay(100);
-
-                // Always reset button icon
-                if (_microphoneIcon != null)
-                    btnRecord.Image = _microphoneIcon;
-
-                // Re-enable speed control if session is active
-                if (_isCallActive)
-                    trackSpeed.Enabled = true;
-
-                // Check if we have audio
-                if (!File.Exists(_audioFilePath))
-                {
-                    statusLabel.Text = "Audio file not found. Ready to record.";
-                    btnPlay.Enabled = false;
-                    return;
-                }
-
-                long fileSize = new FileInfo(_audioFilePath).Length;
-                statusLabel.Text = $"Recorded file: {fileSize} bytes";
-
-                // Enable playback if we have any data
-                btnPlay.Enabled = fileSize > 44;
-
-                // Send to API if connected (regardless of size for testing)
-                if (_realtimeSession != null && _isCallActive && fileSize > 44)
-                {
-                    await SendAudioToAPIAsync();
-                }
-                else if (fileSize <= 44)
-                {
-                    await Task.Delay(1000);
-                    statusLabel.Text = "No audio data captured. Check microphone permissions.";
-                }
-                else
-                {
-                    statusLabel.Text = "Recording saved. Not connected to API.";
-                }
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show($"Error stopping recording: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                statusLabel.Text = "Ready to record.";
-            }
-            finally
-            {
-                // Ensure we're always in a valid state to record again
-                _isRecording = false;
-                if (_microphoneIcon != null)
-                    btnRecord.Image = _microphoneIcon;
-            }
         }
 
         private async Task SendAudioToAPIAsync()
@@ -437,11 +602,9 @@ namespace RealtimePlayGround
 
             try
             {
-                // Ensure file is closed and flushed
-                CleanupRecordingResources();
-                await Task.Delay(100);
+                statusLabel.Text = "Sending audio...";
 
-                // Use NAudio to properly read the PCM data (this handles the WAV header correctly)
+                // Read the audio file
                 byte[] audioData;
                 WaveFormat format;
 
@@ -449,7 +612,6 @@ namespace RealtimePlayGround
                 {
                     format = reader.WaveFormat;
 
-                    // Read all PCM data from the WAV file
                     using var ms = new MemoryStream();
                     byte[] buffer = new byte[reader.WaveFormat.AverageBytesPerSecond];
                     int bytesRead;
@@ -462,79 +624,63 @@ namespace RealtimePlayGround
 
                 if (audioData.Length == 0)
                 {
-                    statusLabel.Text = "No audio captured (no PCM data).";
+                    statusLabel.Text = "No audio data captured.";
                     return;
                 }
 
-                // Convert to 24kHz mono PCM16 (required by OpenAI Realtime API)
+                // Convert to 24kHz mono PCM16 (required by OpenAI)
                 byte[] monoAudio = ConvertToMono(audioData, format.Channels);
                 byte[] resampledAudio = ResampleAudio(monoAudio, format.SampleRate, 24000);
 
-                // Check for minimum 100ms of audio (24kHz mono PCM16 = 4800 bytes for 100ms)
+                // Check minimum length (100ms = 4800 bytes at 24kHz 16-bit mono)
                 if (resampledAudio.Length < 4800)
                 {
                     double durationMs = (resampledAudio.Length / 2.0) / 24000.0 * 1000.0;
-                    statusLabel.Text = $"Audio too short: {resampledAudio.Length} bytes ({durationMs:F1}ms). Need 100ms minimum.";
+                    statusLabel.Text = $"Audio too short ({durationMs:F0}ms). Need 100ms+.";
                     return;
                 }
 
-                // Calculate and display duration
                 double audioDurationMs = (resampledAudio.Length / 2.0) / 24000.0 * 1000.0;
 
                 if (_clientMessageChannel != null)
                 {
-                    // Send audio append message with raw PCM bytes
                     await _clientMessageChannel.Writer.WriteAsync(new RealtimeClientInputAudioBufferAppendMessage(
                         audioContent: new DataContent($"data:audio/pcm;base64,{Convert.ToBase64String(resampledAudio)}")
                     ));
 
-                    // Commit audio buffer
                     await _clientMessageChannel.Writer.WriteAsync(new RealtimeClientInputAudioBufferCommitMessage());
-
-                    // Request response
                     await _clientMessageChannel.Writer.WriteAsync(new RealtimeClientResponseCreateMessage());
 
-                    statusLabel.Text = $"Sent {resampledAudio.Length} bytes ({audioDurationMs:F0}ms).";
-                }
-                else
-                {
-                    statusLabel.Text = "Channel not initialized.";
+                    statusLabel.Text = $"Sent {audioDurationMs:F0}ms of audio.";
                 }
             }
             catch (Exception ex)
             {
-                WriteErrorToRichTextBox($"[ERROR] {ex.Message}");
-                statusLabel.Text = $"Error: {ex.Message}";
+                WriteErrorToRichTextBox($"Error sending audio: {ex.Message}");
+                statusLabel.Text = "Error sending audio.";
             }
         }
 
         private byte[] ConvertToMono(byte[] audioData, int channels)
         {
             if (channels <= 1)
-            {
                 return audioData;
-            }
 
-            // Currently we only expect mono or stereo input
             if (channels != 2)
-            {
                 throw new NotSupportedException($"Unsupported channel count: {channels}");
-            }
 
-            // 16-bit stereo: 4 bytes per sample (2 channels × 2 bytes)
-            // 16-bit mono: 2 bytes per sample
             byte[] monoData = new byte[audioData.Length / 2];
 
-            for (int i = 0; i < audioData.Length; i += 4)
+            for (int i = 0; i < audioData.Length - 3; i += 4)
             {
                 short left = BitConverter.ToInt16(audioData, i);
                 short right = BitConverter.ToInt16(audioData, i + 2);
-
                 short mono = (short)((left + right) / 2);
 
                 byte[] monoBytes = BitConverter.GetBytes(mono);
-                monoData[i / 2] = monoBytes[0];
-                monoData[i / 2 + 1] = monoBytes[1];
+                int destIndex = i / 2;
+                monoData[destIndex] = monoBytes[0];
+                monoData[destIndex + 1] = monoBytes[1];
             }
 
             return monoData;
@@ -543,12 +689,9 @@ namespace RealtimePlayGround
         private byte[] ResampleAudio(byte[] input, int inputRate, int outputRate)
         {
             if (inputRate == outputRate)
-            {
                 return input;
-            }
 
-            // Simple linear interpolation resampling
-            int inputSamples = input.Length / 2; // 16-bit = 2 bytes per sample
+            int inputSamples = input.Length / 2;
             int outputSamples = (int)((long)inputSamples * outputRate / inputRate);
             byte[] output = new byte[outputSamples * 2];
 
@@ -561,7 +704,6 @@ namespace RealtimePlayGround
 
                 short sample1 = BitConverter.ToInt16(input, index1 * 2);
                 short sample2 = BitConverter.ToInt16(input, index2 * 2);
-
                 short interpolated = (short)(sample1 + (sample2 - sample1) * fraction);
 
                 byte[] bytes = BitConverter.GetBytes(interpolated);
@@ -576,7 +718,7 @@ namespace RealtimePlayGround
         {
             if (!File.Exists(_audioFilePath))
             {
-                MessageBox.Show("No audio file to play. Please record first.", "Info", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                MessageBox.Show("No audio file to play.", "Info", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }
 
@@ -606,12 +748,12 @@ namespace RealtimePlayGround
                     {
                         _audioFileReader?.Dispose();
                         _audioFileReader = null;
-                        Invoke(new Action(() =>
+                        Invoke(() =>
                         {
                             if (_startPlayIcon != null)
                                 btnPlay.Image = _startPlayIcon;
                             statusLabel.Text = "Playback finished.";
-                        }));
+                        });
                     };
 
                     _waveOut.Play();
@@ -622,7 +764,7 @@ namespace RealtimePlayGround
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"Error playing audio: {ex}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                MessageBox.Show($"Error playing audio: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
 
@@ -630,10 +772,8 @@ namespace RealtimePlayGround
         {
             if (!_isCallActive)
             {
-                // Disable button during connection attempt
                 btnCall.Enabled = false;
                 await StartCallAsync();
-                // Re-enable button after attempt
                 btnCall.Enabled = true;
             }
             else
@@ -644,7 +784,7 @@ namespace RealtimePlayGround
 
         private LogLevel GetSelectedLogLevel()
         {
-            int selectedIndex = 6; // Default to None
+            int selectedIndex = 6;
             if (cmbLogLevel.InvokeRequired)
             {
                 selectedIndex = (int)cmbLogLevel.Invoke(new Func<int>(() => cmbLogLevel.SelectedIndex));
@@ -680,7 +820,6 @@ namespace RealtimePlayGround
                     return;
                 }
 
-                // Create and configure realtime client
                 _realtimeClient = new OpenAIRealtimeClient(apiKey);
 
                 statusLabel.Text = "Connecting to OpenAI...";
@@ -692,7 +831,6 @@ namespace RealtimePlayGround
                     return;
                 }
 
-                // Define a function that can be called by the AI
                 AIFunction getWeatherFunction = AIFunctionFactory.Create(
                     (string location) =>
                         location switch
@@ -705,7 +843,6 @@ namespace RealtimePlayGround
                     "GetWeather",
                     "Gets the current weather for a given location");
 
-                // Set up services with RichTextBox logging
                 var services = new ServiceCollection()
                     .AddLogging(builder =>
                     {
@@ -717,53 +854,33 @@ namespace RealtimePlayGround
                 var builder = new RealtimeSessionBuilder(session!)
                     .UseFunctionInvocation(configure: functionSession =>
                     {
-                        // Add tools that can be invoked
                         functionSession.AdditionalTools = [getWeatherFunction];
-
-                        // Optional configuration
                         functionSession.MaximumIterationsPerRequest = 10;
                         functionSession.AllowConcurrentInvocation = true;
                         functionSession.IncludeDetailedErrors = false;
                     })
+                    .UseOpenTelemetry(configure: otel =>
+                    {
+                        otel.EnableSensitiveData = true;
+                    })
                     .UseLogging();
 
-                //// Build the session with function invocation enabled
                 _realtimeSession = builder.Build(services);
 
-                //// Update session options to include tools
-                //await _realtimeSession.UpdateAsync(new RealtimeSessionOptions
-                //{
-                //    Tools = [getWeatherFunction]
-                //});
-
-                // Session is created, update UI
                 _isCallActive = true;
                 if (_hangUpIcon != null)
                     btnCall.Image = _hangUpIcon;
                 btnRecord.Enabled = true;
                 btnSend.Enabled = true;
                 richTextBox2.Enabled = true;
-                // cmbVoice.Enabled = false;
                 trackSpeed.Enabled = true;
-                cmbLogLevel.Enabled = false;  // Disable log level selection during active session
-                cmbVoice.Enabled = false;  // Disable voice selection during active session
+                cmbLogLevel.Enabled = false;
+                cmbVoice.Enabled = false;
                 statusLabel.Text = "Connected to OpenAI Realtime.";
 
-                // Get selected voice
-                string selectedVoice = "alloy"; // default
-                if (cmbVoice.InvokeRequired)
-                {
-                    selectedVoice = (string)cmbVoice.Invoke(new Func<string>(() => cmbVoice.SelectedItem?.ToString() ?? "alloy"));
-                }
-                else
-                {
-                    selectedVoice = cmbVoice.SelectedItem?.ToString() ?? "alloy";
-                }
-
-                // Get speed value (0=0.25, 1=1.0, 2=1.5)
+                string selectedVoice = cmbVoice.SelectedItem?.ToString() ?? "alloy";
                 double speedValue = GetSpeedValue();
 
-                // Start streaming communication first
                 await StartStreamingAsync();
 
                 await _realtimeSession.UpdateAsync(new RealtimeSessionOptions
@@ -793,11 +910,9 @@ namespace RealtimePlayGround
 
             try
             {
-                // Create channel for client messages
                 _clientMessageChannel = Channel.CreateUnbounded<RealtimeClientMessage>();
                 _streamingCancellationTokenSource = new CancellationTokenSource();
 
-                // Start background task to process server messages
                 _ = Task.Run(async () =>
                 {
                     try
@@ -806,20 +921,15 @@ namespace RealtimePlayGround
                             _clientMessageChannel.Reader.ReadAllAsync(_streamingCancellationTokenSource.Token),
                             _streamingCancellationTokenSource.Token))
                         {
-                            // Process server messages
                             ProcessServerMessage(serverMessage);
                         }
                     }
                     catch (OperationCanceledException)
                     {
-                        // Expected when cancelling
                     }
                     catch (Exception ex)
                     {
-                        Invoke(new Action(() =>
-                        {
-                            WriteErrorToRichTextBox($"Streaming error: {ex.Message}");
-                        }));
+                        Invoke(() => WriteErrorToRichTextBox($"Streaming error: {ex.Message}"));
                     }
                 }, _streamingCancellationTokenSource.Token);
             }
@@ -831,7 +941,7 @@ namespace RealtimePlayGround
 
         private void ProcessServerMessage(RealtimeServerMessage serverMessage)
         {
-            Invoke(new Action(() =>
+            Invoke(() =>
             {
                 try
                 {
@@ -909,7 +1019,6 @@ namespace RealtimePlayGround
                                     richTextBoxEvents?.AppendText($"{serverMessage.Type} ... {typeProperty} \n");
                                 }
                             }
-                            // Handle other message types as needed
                             break;
                     }
                 }
@@ -917,7 +1026,7 @@ namespace RealtimePlayGround
                 {
                     richTextBox1.AppendText($"Error processing message: {ex.Message}\n");
                 }
-            }));
+            });
         }
 
         private async Task EndCallAsync()
@@ -949,8 +1058,8 @@ namespace RealtimePlayGround
                 if (_startCallIcon != null)
                     btnCall.Image = _startCallIcon;
                 statusLabel.Text = "Call ended.";
-                cmbLogLevel.Enabled = true;  // Re-enable log level selection when session ends
-                cmbVoice.Enabled = true;  // Re-enable voice selection when session ends
+                cmbLogLevel.Enabled = true;
+                cmbVoice.Enabled = true;
             }
             catch (Exception ex)
             {
@@ -964,7 +1073,6 @@ namespace RealtimePlayGround
             {
                 byte[] audioData = Convert.FromBase64String(base64Audio);
 
-                // Initialize provider if needed
                 if (_audioProvider is null)
                 {
                     var waveFormat = new WaveFormat(24000, 16, 1);
@@ -975,13 +1083,11 @@ namespace RealtimePlayGround
                     };
                 }
 
-                // Add samples to the buffer
                 _audioProvider.AddSamples(audioData, 0, audioData.Length);
 
-                // Start playback only after buffering at least 500ms of audio
                 if (_waveOut == null || _waveOut.PlaybackState != PlaybackState.Playing)
                 {
-                    var bufferedDuration = TimeSpan.FromSeconds((double)_audioProvider.BufferedBytes / (_audioProvider.WaveFormat.AverageBytesPerSecond));
+                    var bufferedDuration = TimeSpan.FromSeconds((double)_audioProvider.BufferedBytes / _audioProvider.WaveFormat.AverageBytesPerSecond);
 
                     // Wait until we have at least 500ms buffered before starting playback
                     if (bufferedDuration.TotalMilliseconds >= 500)
@@ -1044,17 +1150,7 @@ namespace RealtimePlayGround
 
         private double GetSpeedValue()
         {
-            int trackValue = 1;
-            if (trackSpeed.InvokeRequired)
-            {
-                trackValue = (int)trackSpeed.Invoke(new Func<int>(() => trackSpeed.Value));
-            }
-            else
-            {
-                trackValue = trackSpeed.Value;
-            }
-
-            // Map track positions to speed values: 0=0.25, 1=1.0, 2=1.5
+            int trackValue = trackSpeed.Value;
             return trackValue switch
             {
                 0 => 0.25,
@@ -1066,7 +1162,6 @@ namespace RealtimePlayGround
 
         private async void trackSpeed_ValueChanged(object? sender, EventArgs e)
         {
-            // Only update if session is active and not recording
             if (_realtimeSession != null && _isCallActive && !_isRecording)
             {
                 try
@@ -1106,15 +1201,12 @@ namespace RealtimePlayGround
 
             string text = richTextBox2.Text.Trim();
             if (string.IsNullOrEmpty(text))
-            {
                 return;
-            }
 
             try
             {
                 statusLabel.Text = "Sending text...";
 
-                // Check if text is an image URL
                 if (text.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
                     text.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
                 {
@@ -1122,24 +1214,17 @@ namespace RealtimePlayGround
                 }
                 else
                 {
-                    // Display sent text in dark green in richTextBox1
                     WriteUserTextToRichTextBox($"You: {text}\n");
 
                     if (_clientMessageChannel != null)
                     {
-                        // Create conversation item with text
                         var contentItem = new RealtimeContentItem(
-                            new[] { new TextContent(text) },
+                            [new TextContent(text)],
                             id: null,
                             role: ChatRole.User
                         );
-                        await _clientMessageChannel.Writer.WriteAsync(new RealtimeClientConversationItemCreateMessage(
-                            item: contentItem
-                        ));
-
-                        // Request response
+                        await _clientMessageChannel.Writer.WriteAsync(new RealtimeClientConversationItemCreateMessage(item: contentItem));
                         await _clientMessageChannel.Writer.WriteAsync(new RealtimeClientResponseCreateMessage());
-
                         statusLabel.Text = "Text sent. Waiting for response...";
                     }
                 }
@@ -1157,10 +1242,7 @@ namespace RealtimePlayGround
         {
             if (e.KeyCode == Keys.Enter)
             {
-                // Prevent the newline from being added
                 e.SuppressKeyPress = true;
-
-                // Send the text
                 btnSend_Click(sender, e);
             }
         }
@@ -1182,90 +1264,53 @@ namespace RealtimePlayGround
             {
                 statusLabel.Text = "Loading image...";
 
-                // Download the image
-                using (var httpClient = new HttpClient())
+                using var httpClient = new HttpClient();
+                httpClient.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0");
+                httpClient.Timeout = TimeSpan.FromSeconds(10);
+
+                var response = await httpClient.GetAsync(imageUrl);
+
+                if (!response.IsSuccessStatusCode)
                 {
-                    // Add user agent to avoid 403 errors on some sites
-                    httpClient.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
-                    httpClient.Timeout = TimeSpan.FromSeconds(10);
-
-                    var response = await httpClient.GetAsync(imageUrl);
-
-                    if (!response.IsSuccessStatusCode)
-                    {
-                        WriteErrorToRichTextBox($"Failed to download image: {response.StatusCode} - {response.ReasonPhrase}\n" +
-                                              $"URL: {imageUrl}\n" +
-                                              $"Note: The server may require authentication or block direct downloads.");
-                        statusLabel.Text = "Error loading image.";
-                        return;
-                    }
-
-                    byte[] imageBytes = await response.Content.ReadAsByteArrayAsync();
-
-                    // Convert to base64
-                    string base64Image = Convert.ToBase64String(imageBytes);
-
-                    // Determine MIME type from content type header or URL
-                    string mimeType = response.Content.Headers.ContentType?.MediaType ?? "image/png";
-
-                    // Fallback to URL extension if content type is not available
-                    if (mimeType == "application/octet-stream" || !mimeType.StartsWith("image/"))
-                    {
-                        if (imageUrl.EndsWith(".jpg", StringComparison.OrdinalIgnoreCase) ||
-                            imageUrl.EndsWith(".jpeg", StringComparison.OrdinalIgnoreCase))
-                        {
-                            mimeType = "image/jpeg";
-                        }
-                        else if (imageUrl.EndsWith(".gif", StringComparison.OrdinalIgnoreCase))
-                        {
-                            mimeType = "image/gif";
-                        }
-                        else if (imageUrl.EndsWith(".png", StringComparison.OrdinalIgnoreCase))
-                        {
-                            mimeType = "image/png";
-                        }
-                    }
-
-                    // Send image to OpenAI through channel
-                    if (_clientMessageChannel != null)
-                    {
-                        // Create conversation item with image
-                        var contentItem = new RealtimeContentItem(
-                            new[] { new DataContent($"data:{mimeType};base64,{base64Image}") },
-                            id: null,
-                            role: ChatRole.User
-                        );
-                        await _clientMessageChannel.Writer.WriteAsync(new RealtimeClientConversationItemCreateMessage(
-                            item: contentItem
-                        ));
-
-                        // Request response
-                        await _clientMessageChannel.Writer.WriteAsync(new RealtimeClientResponseCreateMessage());
-                    }
-
-                    // Insert image into richTextBox1
-                    using (var ms = new MemoryStream(imageBytes))
-                    {
-                        var image = System.Drawing.Image.FromStream(ms);
-                        InsertImageToRichTextBox(image, imageUrl);
-                    }
-
-                    statusLabel.Text = "Image sent. Waiting for response...";
+                    WriteErrorToRichTextBox($"Failed to download image: {response.StatusCode}");
+                    statusLabel.Text = "Error loading image.";
+                    return;
                 }
-            }
-            catch (HttpRequestException ex)
-            {
-                WriteErrorToRichTextBox($"Network error downloading image: {ex.Message}\nURL: {imageUrl}");
-                statusLabel.Text = "Error loading image.";
-            }
-            catch (TaskCanceledException)
-            {
-                WriteErrorToRichTextBox($"Download timeout: The image took too long to download.\nURL: {imageUrl}");
-                statusLabel.Text = "Download timeout.";
+
+                byte[] imageBytes = await response.Content.ReadAsByteArrayAsync();
+                string base64Image = Convert.ToBase64String(imageBytes);
+                string mimeType = response.Content.Headers.ContentType?.MediaType ?? "image/png";
+
+                if (mimeType == "application/octet-stream" || !mimeType.StartsWith("image/"))
+                {
+                    if (imageUrl.EndsWith(".jpg", StringComparison.OrdinalIgnoreCase) || imageUrl.EndsWith(".jpeg", StringComparison.OrdinalIgnoreCase))
+                        mimeType = "image/jpeg";
+                    else if (imageUrl.EndsWith(".gif", StringComparison.OrdinalIgnoreCase))
+                        mimeType = "image/gif";
+                    else
+                        mimeType = "image/png";
+                }
+
+                if (_clientMessageChannel != null)
+                {
+                    var contentItem = new RealtimeContentItem(
+                        [new DataContent($"data:{mimeType};base64,{base64Image}")],
+                        id: null,
+                        role: ChatRole.User
+                    );
+                    await _clientMessageChannel.Writer.WriteAsync(new RealtimeClientConversationItemCreateMessage(item: contentItem));
+                    await _clientMessageChannel.Writer.WriteAsync(new RealtimeClientResponseCreateMessage());
+                }
+
+                using var ms = new MemoryStream(imageBytes);
+                var image = System.Drawing.Image.FromStream(ms);
+                InsertImageToRichTextBox(image, imageUrl);
+
+                statusLabel.Text = "Image sent. Waiting for response...";
             }
             catch (Exception ex)
             {
-                WriteErrorToRichTextBox($"Error handling image: {ex.Message}\nURL: {imageUrl}");
+                WriteErrorToRichTextBox($"Error handling image: {ex.Message}");
                 statusLabel.Text = "Error loading image.";
             }
         }
@@ -1274,13 +1319,8 @@ namespace RealtimePlayGround
         {
             try
             {
-                // Add label before image
                 WriteUserTextToRichTextBox($"You (Image): {url}\n");
-
-                // Convert image to RTF format
                 string rtfImage = GetRtfImage(image);
-
-                // Insert the RTF image
                 richTextBox1.Select(richTextBox1.TextLength, 0);
                 richTextBox1.SelectedRtf = rtfImage;
                 richTextBox1.AppendText("\n");
@@ -1294,45 +1334,36 @@ namespace RealtimePlayGround
 
         private string GetRtfImage(System.Drawing.Image image)
         {
-            // Resize image if too large
             int maxWidth = 300;
             int maxHeight = 300;
 
             if (image.Width > maxWidth || image.Height > maxHeight)
             {
-                double ratioW = (double)maxWidth / image.Width;
-                double ratioH = (double)maxHeight / image.Height;
-                double ratio = Math.Min(ratioW, ratioH);
-
+                double ratio = Math.Min((double)maxWidth / image.Width, (double)maxHeight / image.Height);
                 int newWidth = (int)(image.Width * ratio);
                 int newHeight = (int)(image.Height * ratio);
 
                 var resized = new System.Drawing.Bitmap(newWidth, newHeight);
-                using (var g = System.Drawing.Graphics.FromImage(resized))
-                {
-                    g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
-                    g.DrawImage(image, 0, 0, newWidth, newHeight);
-                }
+                using var g = System.Drawing.Graphics.FromImage(resized);
+                g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+                g.DrawImage(image, 0, 0, newWidth, newHeight);
                 image = resized;
             }
 
-            using (var ms = new MemoryStream())
-            {
-                image.Save(ms, System.Drawing.Imaging.ImageFormat.Png);
-                byte[] bytes = ms.ToArray();
-                string hexString = BitConverter.ToString(bytes).Replace("-", "");
+            using var ms = new MemoryStream();
+            image.Save(ms, System.Drawing.Imaging.ImageFormat.Png);
+            byte[] bytes = ms.ToArray();
+            string hexString = BitConverter.ToString(bytes).Replace("-", "");
 
-                return @"{\rtf1{\pict\pngblip\picw" +
-                       image.Width + @"\pich" + image.Height +
-                       @"\picwgoal" + (image.Width * 15) +
-                       @"\pichgoal" + (image.Height * 15) +
-                       @" " + hexString + @"}}";
-            }
+            return $@"{{\rtf1{{\pict\pngblip\picw{image.Width}\pich{image.Height}\picwgoal{image.Width * 15}\pichgoal{image.Height * 15} {hexString}}}}}";
         }
 
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
             base.OnFormClosing(e);
+
+            _activityListener?.Dispose();
+            _meterListener?.Dispose();
 
             _waveOut?.Stop();
             _waveOut?.Dispose();
@@ -1349,7 +1380,6 @@ namespace RealtimePlayGround
 
         private void cmbLogLevel_SelectedIndexChanged(object sender, EventArgs e)
         {
-
         }
     }
 }

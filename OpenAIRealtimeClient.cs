@@ -2,8 +2,10 @@ using Microsoft.Extensions.AI;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Net;
 using System.Net.WebSockets;
 using System.Runtime.CompilerServices;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -1097,6 +1099,17 @@ namespace RealtimePlayGround
             {
                 return this;
             }
+
+            if (serviceType == typeof(ChatClientMetadata))
+            {
+                return new ChatClientMetadata("OpenAI", null, "realtime");
+            }
+
+            return null;
+        }
+
+        public TService? GetService<TService>(object? key = null) where TService : class
+        {
             return null;
         }
 
@@ -1552,11 +1565,16 @@ namespace RealtimePlayGround
                 {
                     serverMessageType = RealtimeServerMessageType.ResponseCreated;
                 }
-                else if (messageType == "response.done" && root.TryGetProperty("response", out responseElement))
+                else if (messageType == "response.done")
                 {
                     serverMessageType = RealtimeServerMessageType.ResponseDone;
                 }
                 else
+                {
+                    return null;
+                }
+
+                if (!root.TryGetProperty("response", out responseElement))
                 {
                     return null;
                 }
@@ -1570,8 +1588,8 @@ namespace RealtimePlayGround
                 }
 
                 // Parse response object
-                if (responseElement.TryGetProperty("audio", out var responseAudioElement) &&
-                    responseAudioElement.TryGetProperty("output", out var outputElement))
+                if (responseElement.TryGetProperty("audio", out var responseAudioElement) && responseAudioElement.ValueKind == JsonValueKind.Object &&
+                    responseAudioElement.TryGetProperty("output", out var outputElement) && outputElement.ValueKind == JsonValueKind.Object)
                 {
                     if (outputElement.TryGetProperty("format", out var formatElement) &&
                         formatElement.TryGetProperty("type", out var formatTypeElement))
@@ -1605,7 +1623,14 @@ namespace RealtimePlayGround
 
                 if (responseElement.TryGetProperty("max_output_tokens", out var maxOutputTokensElement))
                 {
-                    realtimeServerResponseCreatedMessage.MaxOutputTokens = maxOutputTokensElement.GetInt32();
+                    if (maxOutputTokensElement.ValueKind == JsonValueKind.Number)
+                    {
+                        realtimeServerResponseCreatedMessage.MaxOutputTokens = maxOutputTokensElement.GetInt32();
+                    }
+                    else if (maxOutputTokensElement.ValueKind == JsonValueKind.String && maxOutputTokensElement.GetString() == "inf")
+                    {
+                        realtimeServerResponseCreatedMessage.MaxOutputTokens = int.MaxValue;
+                    }
                 }
 
                 if (responseElement.TryGetProperty("metadata", out var metadataElement) && metadataElement.ValueKind == JsonValueKind.Object)
@@ -1643,10 +1668,10 @@ namespace RealtimePlayGround
                     realtimeServerResponseCreatedMessage.Status = statusElement.GetString();
                 }
 
-                if (responseElement.TryGetProperty("status_details", out var statusDetailsElement) &&
-                    statusDetailsElement.TryGetProperty("error", out var errorElement) &&
-                    errorElement.TryGetProperty("type", out var errorTypeElement) &&
-                    errorElement.TryGetProperty("code", out var errorCodeElement))
+                if (responseElement.TryGetProperty("status_details", out var statusDetailsElement) && statusDetailsElement.ValueKind == JsonValueKind.Object &&
+                    statusDetailsElement.TryGetProperty("error", out var errorElement) && errorElement.ValueKind == JsonValueKind.Object &&
+                    errorElement.TryGetProperty("type", out var errorTypeElement) && errorTypeElement.ValueKind == JsonValueKind.String &&
+                    errorElement.TryGetProperty("code", out var errorCodeElement) && errorCodeElement.ValueKind == JsonValueKind.String)
                 {
                     realtimeServerResponseCreatedMessage.Error = new ErrorContent(errorTypeElement.GetString())
                     {
@@ -1655,7 +1680,7 @@ namespace RealtimePlayGround
                 }
 
                 // Get usage information
-                if (responseElement.TryGetProperty("usage", out var usageElement))
+                if (responseElement.TryGetProperty("usage", out var usageElement) && usageElement.ValueKind == JsonValueKind.Object)
                 {
                     var usageData = new UsageDetails();
 
