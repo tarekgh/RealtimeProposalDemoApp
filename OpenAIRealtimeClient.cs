@@ -1,19 +1,16 @@
 using Microsoft.Extensions.AI;
 using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.Linq;
-using System.Net;
 using System.Net.WebSockets;
 using System.Runtime.CompilerServices;
-using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Threading;
 using System.Threading.Channels;
 using System.Threading.Tasks;
-using System.Xml.Linq;
-using static System.Runtime.InteropServices.JavaScript.JSType;
 
 namespace RealtimePlayGround
 {
@@ -25,7 +22,7 @@ namespace RealtimePlayGround
         // Events for server responses
         public event EventHandler<ServerEventArgs>? ServerEventReceived;
         public event EventHandler<string>? ErrorOccurred;
-        
+
         public OpenAIRealtimeClient(string apiKey, string model = "gpt-realtime")
         {
             _apiKey = apiKey;
@@ -67,15 +64,10 @@ namespace RealtimePlayGround
             // Sessions are disposed independently
         }
 
-        public object? GetService(Type serviceType, object? serviceKey = null)
-        {
-            return null;
-        }
+        public object? GetService(Type serviceType, object? serviceKey = null) => null;
 
         public Task<IRealtimeSession?> CreateSessionAsync(RealtimeSessionOptions? options = null, CancellationToken cancellationToken = default)
-        {
-            return CreateSessionAsync();
-        }
+            => CreateSessionAsync();
     }
 
     // Session implementation
@@ -86,7 +78,7 @@ namespace RealtimePlayGround
         private readonly string _apiKey;
         private readonly string _model;
         private bool _isConnected;
-        private string _partialMessage = string.Empty;
+        private readonly StringBuilder _partialMessageBuilder = new();
         private Channel<RealtimeServerMessage>? _eventChannel;
         private RealtimeSessionOptions? _options;
 
@@ -136,79 +128,78 @@ namespace RealtimePlayGround
 
         public async Task UpdateAsync(RealtimeSessionOptions options, CancellationToken cancellationToken = default)
         {
-            // Convert RealtimeSessionOptions to JsonObject and call UpdateSessionAsync
-            var sessionElement = new JsonObject();
-            sessionElement["type"] = "session.update";
+            var sessionElement = new JsonObject
+            {
+                ["type"] = "session.update"
+            };
             var sessionObject = new JsonObject();
             sessionElement["session"] = sessionObject;
 
-            JsonObject audioElement = new JsonObject();
-            JsonObject audioInputElement = new JsonObject();
-            JsonObject audioOutputElement = new JsonObject();
-            JsonObject audioInputFormatElement = new JsonObject();
-            JsonObject audioOutputFormatElement = new JsonObject();
+            var audioElement = new JsonObject();
+            var audioInputElement = new JsonObject();
+            var audioOutputElement = new JsonObject();
             sessionObject["audio"] = audioElement;
             audioElement["input"] = audioInputElement;
             audioElement["output"] = audioOutputElement;
 
             if (options.InputAudioFormat is not null)
             {
-                audioInputElement["format"] = audioInputFormatElement;
-                audioInputFormatElement["type"] = options.InputAudioFormat.Type;
+                var audioInputFormatElement = new JsonObject
+                {
+                    ["type"] = options.InputAudioFormat.Type
+                };
                 if (options.InputAudioFormat.SampleRate.HasValue)
                 {
                     audioInputFormatElement["rate"] = options.InputAudioFormat.SampleRate.Value;
                 }
+                audioInputElement["format"] = audioInputFormatElement;
             }
 
             if (options.NoiseReductionOptions.HasValue)
             {
-                var noiseReductionObj = new JsonObject();
-                if (options.NoiseReductionOptions.Value == NoiseReductionOptions.NearField)
+                var noiseReductionObj = new JsonObject
                 {
-                    noiseReductionObj["type"] = "near_field";
-                    audioInputElement["noise_reduction"] = noiseReductionObj;
-                }
-                else if (options.NoiseReductionOptions.Value == NoiseReductionOptions.FarField)
-                {
-                    noiseReductionObj["type"] = "far_field";
-                    audioInputElement["noise_reduction"] = noiseReductionObj;
-                }
+                    ["type"] = options.NoiseReductionOptions.Value == NoiseReductionOptions.NearField ? "near_field" : "far_field"
+                };
+                audioInputElement["noise_reduction"] = noiseReductionObj;
             }
 
             if (options.TranscriptionOptions is not null)
             {
-                var transcriptionOptionsObj = new JsonObject();
-                transcriptionOptionsObj["language"] = options.TranscriptionOptions.Language;
-                transcriptionOptionsObj["model"] = options.TranscriptionOptions.Model;
+                var transcriptionOptionsObj = new JsonObject
+                {
+                    ["language"] = options.TranscriptionOptions.Language,
+                    ["model"] = options.TranscriptionOptions.Model
+                };
                 if (options.TranscriptionOptions.Prompt is not null)
                 {
                     transcriptionOptionsObj["prompt"] = options.TranscriptionOptions.Prompt;
                 }
-                // Add transcription options properties here as needed
                 audioInputElement["transcription"] = transcriptionOptionsObj;
             }
 
             if (options.VoiceActivityDetection is ServerVoiceActivityDetection serverVad)
             {
-                var turnDetection = new JsonObject();
-                turnDetection["type"] = "server_vad";
-                turnDetection["create_response"] = serverVad.CreateResponse;
-                turnDetection["idle_timeout_ms"] = serverVad.IdleTimeoutInMilliseconds;
-                turnDetection["interrupt_response"] = serverVad.InterruptResponse;
-                turnDetection["prefix_padding_ms"] = serverVad.PrefixPaddingInMilliseconds;
-                turnDetection["silence_duration_ms"] = serverVad.SilenceDurationInMilliseconds;
-                turnDetection["threshold"] = serverVad.Threshold;
-                audioInputElement["turn_detection"] = turnDetection;
+                audioInputElement["turn_detection"] = new JsonObject
+                {
+                    ["type"] = "server_vad",
+                    ["create_response"] = serverVad.CreateResponse,
+                    ["idle_timeout_ms"] = serverVad.IdleTimeoutInMilliseconds,
+                    ["interrupt_response"] = serverVad.InterruptResponse,
+                    ["prefix_padding_ms"] = serverVad.PrefixPaddingInMilliseconds,
+                    ["silence_duration_ms"] = serverVad.SilenceDurationInMilliseconds,
+                    ["threshold"] = serverVad.Threshold
+                };
             }
             else if (options.VoiceActivityDetection is SemanticVoiceActivityDetection semanticVad)
             {
-                var turnDetection = new JsonObject();
-                turnDetection["type"] = "semantic_vad";
-                turnDetection["create_response"] = semanticVad.CreateResponse;
-                turnDetection["interrupt_response"] = semanticVad.InterruptResponse;
-                turnDetection["eagerness"] = semanticVad.Eagerness;
-                audioInputElement["turn_detection"] = turnDetection;
+                audioInputElement["turn_detection"] = new JsonObject
+                {
+                    ["type"] = "semantic_vad",
+                    ["create_response"] = semanticVad.CreateResponse,
+                    ["interrupt_response"] = semanticVad.InterruptResponse,
+                    ["eagerness"] = semanticVad.Eagerness
+                };
             }
 
             if (options.SessionKind == RealtimeSessionKind.Realtime)
@@ -217,12 +208,15 @@ namespace RealtimePlayGround
 
                 if (options.OutputAudioFormat is not null)
                 {
-                    audioOutputElement["format"] = audioOutputFormatElement;
-                    audioOutputFormatElement["type"] = options.OutputAudioFormat.Type;
+                    var audioOutputFormatElement = new JsonObject
+                    {
+                        ["type"] = options.OutputAudioFormat.Type
+                    };
                     if (options.OutputAudioFormat.SampleRate.HasValue)
                     {
                         audioOutputFormatElement["rate"] = options.OutputAudioFormat.SampleRate.Value;
                     }
+                    audioOutputElement["format"] = audioOutputFormatElement;
                 }
 
                 audioOutputElement["speed"] = options.VoiceSpeed;
@@ -249,66 +243,20 @@ namespace RealtimePlayGround
 
                 if (options.OutputModalities is not null && options.OutputModalities.Any())
                 {
-                    var modalitiesArray = new JsonArray();
-                    foreach (var modality in options.OutputModalities)
-                    {
-                        modalitiesArray.Add(modality);
-                    }
-                    sessionObject["output_modalities"] = modalitiesArray;
+                    sessionObject["output_modalities"] = CreateModalitiesArray(options.OutputModalities);
                 }
-
-                //if (options.PromptTemplate is not null && !string.IsNullOrEmpty(options.PromptTemplate.Id))
-                //{
-                //    var promptObj = new JsonObject
-                //    {
-                //        ["id"] = options.PromptTemplate.Id
-                //    };
-
-                //    if (options.PromptTemplate.Variables is not null && options.PromptTemplate.Variables.Count > 0)
-                //    {
-                //        var variablesObj = new JsonObject();
-                //        foreach (var kvp in options.PromptTemplate.Variables)
-                //        {
-                //            variablesObj[kvp.Key] = JsonValue.Create(kvp.Value);
-                //        }
-                //        promptObj["variables"] = variablesObj;
-                //    }
-
-                //    if (!string.IsNullOrEmpty(options.PromptTemplate.Version))
-                //    {
-                //        promptObj["version"] = options.PromptTemplate.Version;
-                //    }
-
-                //    sessionObject["prompt"] = promptObj;
-                //}
-                // to do item.input_audio_transcription.logprobs and tools properties
 
                 if (options.Tools is not null)
                 {
                     var toolsArray = new JsonArray();
                     foreach (var tool in options.Tools)
                     {
-                        // Check if it's an AIFunction
-                        if (tool is AIFunction aiFunction && !string.IsNullOrEmpty(aiFunction.Name))
+                        var toolObj = SerializeAIFunctionToJson(tool as AIFunction);
+                        if (toolObj is not null)
                         {
-                            var toolObj = new JsonObject();
-                            toolObj["type"] = "function";
-
-                            // Get function name
-                            toolObj["name"] = aiFunction.Name;
-
-                            // Get description
-                            if (!string.IsNullOrEmpty(aiFunction.Description))
-                            {
-                                toolObj["description"] = aiFunction.Description;
-                            }
-
-                            toolObj["parameters"] = JsonNode.Parse(aiFunction.JsonSchema.GetRawText());
-
                             toolsArray.Add(toolObj);
                         }
                     }
-
                     sessionObject["tools"] = toolsArray;
                 }
             }
@@ -322,7 +270,6 @@ namespace RealtimePlayGround
             await SendEventAsync(sessionElement);
         }
 
-        // End the current session
         public async Task EndSessionAsync()
         {
             try
@@ -341,63 +288,32 @@ namespace RealtimePlayGround
             }
         }
 
-        // Send audio input (base64 encoded PCM16 audio)
-        public async Task SendAudioAsync(string base64Audio)
-        {
-            var audioEvent = new JsonObject
+        public Task SendAudioAsync(string base64Audio)
+            => SendEventAsync(new JsonObject
             {
                 ["type"] = "input_audio_buffer.append",
                 ["audio"] = base64Audio
-            };
+            });
 
-            await SendEventAsync(audioEvent);
-        }
+        public Task CommitAudioAsync()
+            => SendEventAsync(new JsonObject { ["type"] = "input_audio_buffer.commit" });
 
-        // Commit audio buffer
-        public async Task CommitAudioAsync()
-        {
-            var commitEvent = new JsonObject
-            {
-                ["type"] = "input_audio_buffer.commit"
-            };
-
-            await SendEventAsync(commitEvent);
-        }
-
-        // Create response (triggers model to generate response)
-        public async Task CreateResponseAsync()
-        {
-            var responseEvent = new JsonObject
+        public Task CreateResponseAsync()
+            => SendEventAsync(new JsonObject
             {
                 ["type"] = "response.create",
                 ["response"] = new JsonObject
                 {
-                    // ["output_modalities"] = new JsonArray("text", "audio"),
-                    // ["instructions"] = "Respond to the input audio naturally in English."
                     ["instructions"] = "Respond to the the audio input.",
                 }
-            };
+            });
 
-            await SendEventAsync(responseEvent);
-        }
-
-        // Clear audio buffer
-        public async Task ClearAudioBufferAsync()
-        {
-            var clearEvent = new JsonObject
-            {
-                ["type"] = "input_audio_buffer.clear"
-            };
-
-            await SendEventAsync(clearEvent);
-        }
+        public Task ClearAudioBufferAsync()
+            => SendEventAsync(new JsonObject { ["type"] = "input_audio_buffer.clear" });
 
         public async Task InjectClientMessageAsync(RealtimeClientMessage message, CancellationToken cancellationToken = default)
         {
-            if (message is null)
-            {
-                throw new ArgumentNullException(nameof(message));
-            }
+            ArgumentNullException.ThrowIfNull(message);
 
             if (cancellationToken.IsCancellationRequested)
             {
@@ -436,11 +352,8 @@ namespace RealtimePlayGround
                                 }
                                 break;
 
-                            case "audio/pcmu": // The G.711 μ-law format
-                                formatObj["type"] = responseCreate.OutputAudioOptions.Type;
-                                break;
-
-                            case "audio/pcma": // The G.711 A-law format.
+                            case "audio/pcmu":
+                            case "audio/pcma":
                                 formatObj["type"] = responseCreate.OutputAudioOptions.Type;
                                 break;
                         }
@@ -452,14 +365,11 @@ namespace RealtimePlayGround
                             outputObj["voice"] = responseCreate.OutputVoice;
                         }
 
-                        // Handle OutputVoice (audio.output.voice)
-
                         audioObj["output"] = outputObj;
                         responseObj["audio"] = audioObj;
                     }
                     else if (!string.IsNullOrEmpty(responseCreate.OutputVoice))
                     {
-                        // OutputVoice without OutputAudioOptions
                         responseObj["audio"] = new JsonObject
                         {
                             ["output"] = new JsonObject
@@ -469,21 +379,12 @@ namespace RealtimePlayGround
                         };
                     }
 
-                    // Handle conversation
-                    if (responseCreate.ExcludeFromConversation)
-                    {
-                        responseObj["conversation"] = "none";
-                    }
-                    else
-                    {
-                        responseObj["conversation"] = "auto";
-                    }
+                    responseObj["conversation"] = responseCreate.ExcludeFromConversation ? "none" : "auto";
 
-                    // Handle Items (input)
-                    if (responseCreate.Items != null && responseCreate.Items.Any())
+                    if (responseCreate.Items is { } items && items.Any())
                     {
                         var inputArray = new JsonArray();
-                        foreach (var item in responseCreate.Items)
+                        foreach (var item in items)
                         {
                             if (item is RealtimeContentItem contentItem && contentItem.Contents is not null)
                             {
@@ -503,69 +404,24 @@ namespace RealtimePlayGround
                                     itemObj["id"] = contentItem.Id;
                                 }
 
-                                JsonArray contentsArray = new JsonArray();
-
-                                foreach (var content in contentItem.Contents)
-                                {
-                                    if (content is TextContent textContent)
-                                    {
-                                        contentsArray.Add(
-                                            new JsonObject
-                                            {
-                                                ["type"] = "input_text",
-                                                ["text"] = textContent.Text
-                                            });
-
-                                        continue;
-                                    }
-                                    else if (content is DataContent audioContent && audioContent.MediaType.StartsWith("audio/"))
-                                    {
-                                        contentsArray.Add(
-                                            new JsonObject
-                                            {
-                                                ["type"] = "input_audio",
-                                                ["audio"] = audioContent.Base64Data.ToString()
-                                            });
-
-                                        continue;
-                                    }
-                                    else if (content is DataContent imageContent && imageContent.MediaType.StartsWith("image/"))
-                                    {
-                                        contentsArray.Add(
-                                            new JsonObject
-                                            {
-                                                ["type"] = "input_image",
-                                                ["image"] = imageContent.Base64Data.ToString()
-                                            });
-
-                                        continue;
-                                    }
-                                }
-
-                                itemObj["content"] = contentsArray;
+                                itemObj["content"] = SerializeContentsToJsonArray(contentItem.Contents);
                                 inputArray.Add(itemObj);
-                                continue;
                             }
                         }
-
-                        // To do: Support other content types as needed
                         responseObj["input"] = inputArray;
                     }
 
-                    // Handle Instructions
                     if (!string.IsNullOrEmpty(responseCreate.Instructions))
                     {
                         responseObj["instructions"] = responseCreate.Instructions;
                     }
 
-                    // Handle MaxOutputTokens
                     if (responseCreate.MaxOutputTokens.HasValue)
                     {
                         responseObj["max_output_tokens"] = responseCreate.MaxOutputTokens.Value;
                     }
 
-                    // Handle Metadata
-                    if (responseCreate.Metadata is not null && responseCreate.Metadata.Count > 0)
+                    if (responseCreate.Metadata is { Count: > 0 })
                     {
                         var metadataObj = new JsonObject();
                         foreach (var kvp in responseCreate.Metadata)
@@ -575,44 +431,11 @@ namespace RealtimePlayGround
                         responseObj["metadata"] = metadataObj;
                     }
 
-                    // Handle OutputModalities
                     if (responseCreate.OutputModalities is not null && responseCreate.OutputModalities.Any())
                     {
-                        var modalitiesArray = new JsonArray();
-                        foreach (var modality in responseCreate.OutputModalities)
-                        {
-                            modalitiesArray.Add(modality);
-                        }
-                        responseObj["output_modalities"] = modalitiesArray;
+                        responseObj["output_modalities"] = CreateModalitiesArray(responseCreate.OutputModalities);
                     }
 
-                    // Handle PromptTemplate
-                    //if (responseCreate.PromptTemplate is not null && !string.IsNullOrEmpty(responseCreate.PromptTemplate.Id))
-                    //{
-                    //    var promptObj = new JsonObject
-                    //    {
-                    //        ["id"] = responseCreate.PromptTemplate.Id
-                    //    };
-
-                    //    if (responseCreate.PromptTemplate.Variables is not null && responseCreate.PromptTemplate.Variables.Count > 0)
-                    //    {
-                    //        var variablesObj = new JsonObject();
-                    //        foreach (var kvp in responseCreate.PromptTemplate.Variables)
-                    //        {
-                    //            variablesObj[kvp.Key] = JsonValue.Create(kvp.Value);
-                    //        }
-                    //        promptObj["variables"] = variablesObj;
-                    //    }
-
-                    //    if (!string.IsNullOrEmpty(responseCreate.PromptTemplate.Version))
-                    //    {
-                    //        promptObj["version"] = responseCreate.PromptTemplate.Version;
-                    //    }
-
-                    //    responseObj["prompt"] = promptObj;
-                    //}
-
-                    // Handle Function Tool Name
                     if (responseCreate.AIFunction is not null)
                     {
                         responseObj["tool_choice"] = new JsonObject
@@ -622,114 +445,61 @@ namespace RealtimePlayGround
                         };
                     }
                     else if (responseCreate.HostedMcpServerTool is not null)
-                    // !string.IsNullOrEmpty(responseCreate.McpToolName) && !string.IsNullOrEmpty(responseCreate.McpToolServerLabel))
                     {
-                        // Handle MCP Tool
-
-                        var mcpToolChoice = new JsonObject
+                        responseObj["tool_choice"] = new JsonObject
                         {
-                            ["type"] = "mcp"
+                            ["type"] = "mcp",
+                            ["server_label"] = responseCreate.HostedMcpServerTool.ServerName,
+                            ["name"] = responseCreate.HostedMcpServerTool.Name
                         };
-
-                        mcpToolChoice["server_label"] = responseCreate.HostedMcpServerTool.ServerName;
-                        mcpToolChoice["name"] = responseCreate.HostedMcpServerTool.Name;
-                        responseObj["tool_choice"] = mcpToolChoice;
                     }
                     else if (responseCreate.ToolChoiceMode.HasValue)
                     {
-                        switch (responseCreate.ToolChoiceMode.Value)
+                        responseObj["tool_choice"] = responseCreate.ToolChoiceMode.Value switch
                         {
-                            case ToolChoiceMode.None:
-                                responseObj["tool_choice"] = "none";
-                                break;
-                            case ToolChoiceMode.Auto:
-                                responseObj["tool_choice"] = "auto";
-                                break;
-                            case ToolChoiceMode.Required:
-                                responseObj["tool_choice"] = "required";
-                                break;
-                        }
+                            ToolChoiceMode.None => "none",
+                            ToolChoiceMode.Auto => "auto",
+                            ToolChoiceMode.Required => "required",
+                            _ => "auto"
+                        };
                     }
 
-                    // Handle Tools
                     if (responseCreate.Tools is not null && responseCreate.Tools.Any())
                     {
                         var toolsArray = new JsonArray();
 
                         foreach (var tool in responseCreate.Tools)
                         {
-                            var toolObj = new JsonObject();
+                            JsonObject? toolObj = null;
 
-                            // Check if it's an AIFunction
                             if (tool is AIFunction aiFunction && !string.IsNullOrEmpty(aiFunction.Name))
                             {
-                                toolObj["type"] = "function";
-
-                                // Get function name
-                                toolObj["name"] = aiFunction.Name;
-
-                                // Get description
-                                if (!string.IsNullOrEmpty(aiFunction.Description))
-                                {
-                                    toolObj["description"] = aiFunction.Description;
-                                }
-
-                                toolObj["type"] = "function";
-
-                                // Get function name
-                                toolObj["name"] = aiFunction.Name;
-
-                                // Get description
-                                if (!string.IsNullOrEmpty(aiFunction.Description))
-                                {
-                                    toolObj["description"] = aiFunction.Description;
-                                }
-
-                                toolObj["parameters"] = JsonNode.Parse(aiFunction.JsonSchema.GetRawText());
+                                toolObj = SerializeAIFunctionToJson(aiFunction);
                             }
-                            // Check if it's an MCP tool - serialize the tool and extract MCP properties
                             else
                             {
-                                // Serialize the entire tool to get all properties
                                 var toolJson = JsonSerializer.SerializeToNode(tool);
 
-                                // Check if the serialized JSON has MCP properties
-                                if (toolJson is not null)
+                                if (toolJson is not null &&
+                                    (toolJson["server_label"] is not null || toolJson["server_url"] is not null || toolJson["connector_id"] is not null))
                                 {
-                                    // Check if it has MCP-specific properties
-                                    if (toolJson["server_label"] is not null || toolJson["server_url"] is not null || toolJson["connector_id"] is not null)
-                                    {
-                                        toolObj["type"] = "mcp";
+                                    toolObj = new JsonObject { ["type"] = "mcp" };
 
-                                        // Copy all MCP-related properties from the serialized JSON
-                                        if (toolJson["server_label"] is not null)
-                                            toolObj["server_label"] = toolJson["server_label"];
-
-                                        if (toolJson["server_url"] is not null)
-                                            toolObj["server_url"] = toolJson["server_url"];
-
-                                        if (toolJson["connector_id"] is not null)
-                                            toolObj["connector_id"] = toolJson["connector_id"];
-
-                                        if (toolJson["authorization"] is not null)
-                                            toolObj["authorization"] = toolJson["authorization"];
-
-                                        if (toolJson["headers"] is not null)
-                                            toolObj["headers"] = toolJson["headers"];
-
-                                        if (toolJson["require_approval"] is not null)
-                                            toolObj["require_approval"] = toolJson["require_approval"];
-
-                                        if (toolJson["server_description"] is not null)
-                                            toolObj["server_description"] = toolJson["server_description"];
-
-                                        if (toolJson["allowed_tools"] is not null)
-                                            toolObj["allowed_tools"] = toolJson["allowed_tools"];
-                                    }
+                                    CopyJsonPropertyIfExists(toolJson, toolObj, "server_label");
+                                    CopyJsonPropertyIfExists(toolJson, toolObj, "server_url");
+                                    CopyJsonPropertyIfExists(toolJson, toolObj, "connector_id");
+                                    CopyJsonPropertyIfExists(toolJson, toolObj, "authorization");
+                                    CopyJsonPropertyIfExists(toolJson, toolObj, "headers");
+                                    CopyJsonPropertyIfExists(toolJson, toolObj, "require_approval");
+                                    CopyJsonPropertyIfExists(toolJson, toolObj, "server_description");
+                                    CopyJsonPropertyIfExists(toolJson, toolObj, "allowed_tools");
                                 }
                             }
 
-                            toolsArray.Add(toolObj);
+                            if (toolObj is not null)
+                            {
+                                toolsArray.Add(toolObj);
+                            }
                         }
 
                         responseObj["tools"] = toolsArray;
@@ -760,14 +530,12 @@ namespace RealtimePlayGround
                             if (contentItem.Contents.Count > 0 && contentItem.Contents[0] is FunctionResultContent functionResult)
                             {
                                 itemObj["type"] = "function_call_output";
-                                // itemObj["object"] = "realtime.item";
                                 itemObj["call_id"] = functionResult.CallId;
                                 itemObj["output"] = functionResult?.Result?.ToString();
                             }
                             else if (contentItem.Contents.Count > 0 && contentItem.Contents[0] is FunctionCallContent functionCall)
                             {
                                 itemObj["type"] = "function_call";
-                                // itemObj["object"] = "realtime.item";
                                 itemObj["call_id"] = functionCall.CallId;
                                 itemObj["name"] = functionCall.Name;
 
@@ -785,42 +553,10 @@ namespace RealtimePlayGround
                                     itemObj["role"] = contentItem.Role.Value.Value;
                                 }
 
-                                JsonArray contentsArray = new JsonArray();
-                                foreach (var content in contentItem.Contents)
-                                {
-                                    if (content is TextContent textContent)
-                                    {
-                                        contentsArray.Add(
-                                            new JsonObject
-                                            {
-                                                ["type"] = "input_text",
-                                                ["text"] = textContent.Text
-                                            });
-                                    }
-                                    else if (content is DataContent audioContent && audioContent.MediaType.StartsWith("audio/"))
-                                    {
-                                        contentsArray.Add(
-                                            new JsonObject
-                                            {
-                                                ["type"] = "input_audio",
-                                                ["audio"] = audioContent.Base64Data.ToString()
-                                            });
-                                    }
-                                    else if (content is DataContent imageContent && imageContent.MediaType.StartsWith("image/"))
-                                    {
-                                        contentsArray.Add(
-                                            new JsonObject
-                                            {
-                                                ["type"] = "input_image",
-                                                ["image_url"] = imageContent.Uri
-                                            });
-                                    }
-                                }
-                                itemObj["content"] = contentsArray;
+                                itemObj["content"] = SerializeContentsToJsonArray(contentItem.Contents);
                             }
 
                             jsonMessage["item"] = itemObj;
-                            // To do: Support other content types as needed
                         }
                     }
                     break;
@@ -830,63 +566,44 @@ namespace RealtimePlayGround
                     {
                         jsonMessage["type"] = "input_audio_buffer.append";
 
-                        // DataContent is created with "data:audio/pcm;base64,<data>" format
-                        // Extract the Uri property and get the base64 part after the comma
                         string dataUri = audioAppend.Content.Uri?.ToString() ?? string.Empty;
-                        string base64Data;
-
                         int commaIndex = dataUri.LastIndexOf(',');
-                        if (commaIndex >= 0 && commaIndex < dataUri.Length - 1)
-                        {
-                            // Extract everything after the last comma
-                            base64Data = dataUri.Substring(commaIndex + 1);
-                        }
-                        else
-                        {
-                            // Fallback: try to get raw data directly
-                            base64Data = Convert.ToBase64String(audioAppend.Content.Data.ToArray());
-                        }
 
-                        jsonMessage["audio"] = base64Data;
+                        jsonMessage["audio"] = commaIndex >= 0 && commaIndex < dataUri.Length - 1
+                            ? dataUri[(commaIndex + 1)..]
+                            : Convert.ToBase64String(audioAppend.Content.Data.ToArray());
                     }
                     break;
 
-                case RealtimeClientInputAudioBufferCommitMessage audioCommit:
+                case RealtimeClientInputAudioBufferCommitMessage:
                     jsonMessage["type"] = "input_audio_buffer.commit";
                     break;
 
                 default:
-                    if (message.RawRepresentation is not null)
+                    if (message.RawRepresentation is string rawString)
                     {
-                        if (message.RawRepresentation is string rawString)
-                        {
-                            // For raw string content, parse it directly
-                            jsonMessage = JsonSerializer.Deserialize<JsonObject>(rawString);
-                        }
-                        else if (message.RawRepresentation is JsonObject rawJsonObject)
-                        {
-                            // For raw JsonObject content, use it directly
-                            jsonMessage = rawJsonObject;
-                        }
+                        jsonMessage = JsonSerializer.Deserialize<JsonObject>(rawString);
+                    }
+                    else if (message.RawRepresentation is JsonObject rawJsonObject)
+                    {
+                        jsonMessage = rawJsonObject;
                     }
                     break;
             }
 
-            if (jsonMessage?.TryGetPropertyValue("type", out var _) is true)
+            if (jsonMessage?.TryGetPropertyValue("type", out _) is true)
             {
                 await SendEventAsync(jsonMessage);
             }
         }
 
-        // Get streaming response as IAsyncEnumerable
         public async IAsyncEnumerable<RealtimeServerMessage> GetStreamingResponseAsync(
-                                    IAsyncEnumerable<RealtimeClientMessage> updates,
-                                    [EnumeratorCancellation] CancellationToken cancellationToken = default)
+            IAsyncEnumerable<RealtimeClientMessage> updates,
+            [EnumeratorCancellation] CancellationToken cancellationToken = default)
         {
             if (_eventChannel == null)
                 yield break;
 
-            // Start a task to process incoming client messages
             var processUpdatesTask = Task.Run(async () =>
             {
                 try
@@ -896,55 +613,21 @@ namespace RealtimePlayGround
                         await InjectClientMessageAsync(message, cancellationToken).ConfigureAwait(false);
                     }
                 }
-                catch (OperationCanceledException)
-                {
-                    // Expected when cancelled
-                }
+                catch (OperationCanceledException) { }
                 catch (Exception ex)
                 {
                     ErrorOccurred?.Invoke(this, $"Error processing updates: {ex.Message}");
                 }
             }, cancellationToken);
 
-            var enumerator = _eventChannel.Reader.ReadAllAsync(cancellationToken).GetAsyncEnumerator();
-            try
+            await foreach (var serverEvent in _eventChannel.Reader.ReadAllAsync(cancellationToken))
             {
-                while (true)
-                {
-                    RealtimeServerMessage currentEvent;
-                    try
-                    {
-                        if (!await enumerator.MoveNextAsync())
-                        {
-                            break;
-                        }
-                        currentEvent = enumerator.Current;
-                    }
-                    catch (OperationCanceledException)
-                    {
-                        // Catch cancellation from the MoveNextAsync call
-                        break;
-                    }
-
-                    yield return currentEvent;
-                }
-            }
-            finally
-            {
-                await enumerator.DisposeAsync();
+                yield return serverEvent;
             }
 
-            // Stream server events
-            //await foreach (var serverEvent in _eventChannel.Reader.ReadAllAsync(cancellationToken))
-            //{
-            //    yield return serverEvent;
-            //}
-
-            // Wait for update processing to complete
             await processUpdatesTask;
         }
 
-        // Send generic event
         private async Task SendEventAsync(JsonObject eventData)
         {
             if (_webSocket?.State != WebSocketState.Open)
@@ -965,11 +648,9 @@ namespace RealtimePlayGround
             }
         }
 
-        // Receive messages from server
         private async Task ReceiveMessagesAsync(CancellationToken cancellationToken)
         {
-            var buffer = new byte[1024 * 16]; // 16KB buffer
-
+            byte[] buffer = ArrayPool<byte>.Shared.Rent(1024 * 16);
             try
             {
                 while (_webSocket?.State == WebSocketState.Open && !cancellationToken.IsCancellationRequested)
@@ -989,33 +670,34 @@ namespace RealtimePlayGround
                     }
                 }
             }
-            catch (OperationCanceledException)
-            {
-                // Expected when cancelling
-            }
+            catch (OperationCanceledException) { }
             catch (Exception ex)
             {
                 ErrorOccurred?.Invoke(this, $"Error receiving messages: {ex}");
             }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(buffer);
+            }
         }
 
-        // Process server events
         private void ProcessServerEvent(string message)
         {
             try
             {
-                if (_partialMessage.Length > 0)
+                if (_partialMessageBuilder.Length > 0)
                 {
-                    message = _partialMessage + message;
-                    _partialMessage = string.Empty;
+                    _partialMessageBuilder.Append(message);
+                    message = _partialMessageBuilder.ToString();
+                    _partialMessageBuilder.Clear();
                 }
 
                 if (message.EndsWith('}'))
                 {
                     var jsonDoc = JsonDocument.Parse(message);
-                    var eventType = jsonDoc.RootElement.GetProperty("type").GetString();
+                    var root = jsonDoc.RootElement;
+                    var eventType = root.GetProperty("type").GetString();
 
-                    // Keep ServerEventArgs for backward compatibility with existing event handlers
                     var eventArgs = new ServerEventArgs
                     {
                         EventType = eventType ?? "unknown",
@@ -1024,41 +706,30 @@ namespace RealtimePlayGround
 
                     ServerEventReceived?.Invoke(this, eventArgs);
 
-                    // Convert to RealtimeServerMessage for the channel based on event type
-                    RealtimeServerMessage? serverMessage = null;
-
                     try
                     {
-                        var root = jsonDoc.RootElement;
-
-                        // Map event type to specific RealtimeServerMessage type
-                        serverMessage = eventType switch
+                        var serverMessage = eventType switch
                         {
-                            "error" => CreateErrorMessage(message),
-
+                            "error" => CreateErrorMessage(root),
                             "conversation.item.input_audio_transcription.delta" or
                             "conversation.item.input_audio_transcription.completed" or
                             "conversation.item.input_audio_transcription.failed" =>
-                                CreateInputAudioTranscriptionMessage(message),
-
+                                CreateInputAudioTranscriptionMessage(root, eventType),
                             "response.output_audio_transcript.delta" or
                             "response.output_audio_transcript.done" or
                             "response.output_audio.delta" or
                             "response.output_audio.done" =>
-                                CreateOutputTextAudioMessage(message),
-
+                                CreateOutputTextAudioMessage(root, eventType),
                             "response.created" or
                             "response.done" =>
-                                CreateResponseCreatedMessage(message),
-
-                            "response.output_item.added" or "response.output_item.done" => 
-                                CreateResponseOutItemMessage(message),
-
-                            // For other event types, skip
+                                CreateResponseCreatedMessage(root, eventType),
+                            "response.output_item.added" or
+                            "response.output_item.done" =>
+                                CreateResponseOutItemMessage(root, eventType),
                             _ => new RealtimeServerMessage
                             {
                                 Type = RealtimeServerMessageType.RawContentOnly,
-                                RawRepresentation = root
+                                RawRepresentation = root.Clone()
                             }
                         };
 
@@ -1067,15 +738,11 @@ namespace RealtimePlayGround
                             _eventChannel?.Writer.TryWrite(serverMessage);
                         }
                     }
-                    catch
-                    {
-                        // If deserialization fails, skip this message as we can't create a valid RealtimeServerMessage
-                        // The ServerEventReceived event has already been raised for backward compatibility
-                    }
+                    catch { }
                 }
                 else
                 {
-                    _partialMessage = message;
+                    _partialMessageBuilder.Append(message);
                 }
             }
             catch (Exception ex)
@@ -1094,743 +761,484 @@ namespace RealtimePlayGround
 
         public object? GetService(Type serviceType, object? serviceKey = null)
         {
-            // Add more services as needed
             if (serviceType == typeof(OpenAIRealtimeClient))
-            {
                 return this;
-            }
 
             if (serviceType == typeof(ChatClientMetadata))
-            {
                 return new ChatClientMetadata("OpenAI", null, "realtime");
-            }
 
             return null;
         }
 
         public TService? GetService<TService>(object? key = null) where TService : class
+            => GetService(typeof(TService), key) as TService;
+
+        #region Helper Methods
+
+        private static void CopyJsonPropertyIfExists(JsonNode? source, JsonObject target, string propertyName)
         {
+            if (source?[propertyName] is JsonNode value)
+            {
+                target[propertyName] = value.DeepClone();
+            }
+        }
+
+        private static JsonArray CreateModalitiesArray(IEnumerable<string> modalities)
+            => new([.. modalities.Select(m => JsonValue.Create(m))]);
+
+        private static JsonObject? SerializeAIFunctionToJson(AIFunction? aiFunction)
+        {
+            if (aiFunction is null || string.IsNullOrEmpty(aiFunction.Name))
+                return null;
+
+            var toolObj = new JsonObject
+            {
+                ["type"] = "function",
+                ["name"] = aiFunction.Name
+            };
+
+            if (!string.IsNullOrEmpty(aiFunction.Description))
+            {
+                toolObj["description"] = aiFunction.Description;
+            }
+
+            toolObj["parameters"] = JsonNode.Parse(aiFunction.JsonSchema.GetRawText());
+            return toolObj;
+        }
+
+        private static JsonArray SerializeContentsToJsonArray(IEnumerable<AIContent> contents)
+        {
+            var contentsArray = new JsonArray();
+
+            foreach (var content in contents)
+            {
+                if (content is TextContent textContent)
+                {
+                    contentsArray.Add(new JsonObject
+                    {
+                        ["type"] = "input_text",
+                        ["text"] = textContent.Text
+                    });
+                }
+                else if (content is DataContent dataContent)
+                {
+                    if (dataContent.MediaType.StartsWith("audio/"))
+                    {
+                        contentsArray.Add(new JsonObject
+                        {
+                            ["type"] = "input_audio",
+                            ["audio"] = dataContent.Base64Data.ToString()
+                        });
+                    }
+                    else if (dataContent.MediaType.StartsWith("image/"))
+                    {
+                        contentsArray.Add(new JsonObject
+                        {
+                            ["type"] = "input_image",
+                            ["image_url"] = dataContent.Uri
+                        });
+                    }
+                }
+            }
+
+            return contentsArray;
+        }
+
+        private static ChatRole? ParseChatRole(string? roleString) => roleString switch
+        {
+            "assistant" => ChatRole.Assistant,
+            "user" => ChatRole.User,
+            "system" => ChatRole.System,
+            _ => null
+        };
+
+        private static UsageDetails? ParseUsageDetails(JsonElement usageElement, bool requireTypeCheck = false)
+        {
+            if (usageElement.ValueKind != JsonValueKind.Object)
+                return null;
+
+            if (requireTypeCheck &&
+                (!usageElement.TryGetProperty("type", out var usageTypeElement) ||
+                 usageTypeElement.GetString() != "tokens"))
+            {
+                return null;
+            }
+
+            var usageData = new UsageDetails();
+
+            if (usageElement.TryGetProperty("input_tokens", out var inputTokensElement))
+                usageData.InputTokenCount = inputTokensElement.GetInt32();
+
+            if (usageElement.TryGetProperty("output_tokens", out var outputTokensElement))
+                usageData.OutputTokenCount = outputTokensElement.GetInt32();
+
+            if (usageElement.TryGetProperty("total_tokens", out var totalTokensElement))
+                usageData.TotalTokenCount = totalTokensElement.GetInt32();
+
+            if (usageElement.TryGetProperty("input_token_details", out var inputTokenDetailsElement) &&
+                inputTokenDetailsElement.ValueKind == JsonValueKind.Object)
+            {
+                if (inputTokenDetailsElement.TryGetProperty("audio_tokens", out var audioTokensElement))
+                    usageData.InputAudioTokenCount = audioTokensElement.GetInt32();
+
+                if (inputTokenDetailsElement.TryGetProperty("text_tokens", out var textTokensElement))
+                    usageData.InputTextTokenCount = textTokensElement.GetInt32();
+            }
+
+            if (usageElement.TryGetProperty("output_token_details", out var outputTokenDetailsElement) &&
+                outputTokenDetailsElement.ValueKind == JsonValueKind.Object)
+            {
+                if (outputTokenDetailsElement.TryGetProperty("audio_tokens", out var audioTokensElement))
+                    usageData.OutputAudioTokenCount = audioTokensElement.GetInt32();
+
+                if (outputTokenDetailsElement.TryGetProperty("text_tokens", out var textTokensElement))
+                    usageData.OutputTextTokenCount = textTokensElement.GetInt32();
+            }
+
+            return usageData;
+        }
+
+        private static List<AIContent> ParseContentItems(JsonElement contentElements)
+        {
+            if (contentElements.ValueKind != JsonValueKind.Array)
+                return [];
+
+            var contentList = new List<AIContent>();
+
+            foreach (var contentElement in contentElements.EnumerateArray())
+            {
+                if (!contentElement.TryGetProperty("type", out var contentTypeElement))
+                    continue;
+
+                string? contentType = contentTypeElement.GetString();
+
+                if (contentType == "input_text")
+                {
+                    if (contentElement.TryGetProperty("text", out var textElement))
+                        contentList.Add(new TextContent(textElement.GetString()));
+                    else if (contentElement.TryGetProperty("transcript", out var transcriptElement))
+                        contentList.Add(new TextContent(transcriptElement.GetString()));
+                }
+                else if (contentType == "input_audio" && contentElement.TryGetProperty("audio", out var audioDataElement))
+                {
+                    contentList.Add(new DataContent($"data:audio/pcm;base64,{audioDataElement.GetString()}"));
+                }
+                else if (contentType == "input_image" && contentElement.TryGetProperty("image_url", out var imageUrlElement))
+                {
+                    contentList.Add(new DataContent(imageUrlElement.GetString()!));
+                }
+            }
+
+            return contentList;
+        }
+
+        private static RealtimeContentItem? ParseRealtimeContentItem(JsonElement itemElement)
+        {
+            if (!itemElement.TryGetProperty("type", out var itemTypeElement))
+                return null;
+
+            string? id = itemElement.TryGetProperty("id", out var idElement) ? idElement.GetString() : null;
+            string? itemType = itemTypeElement.GetString();
+
+            if (itemType == "message")
+            {
+                if (!itemElement.TryGetProperty("content", out var contentElements) ||
+                    contentElements.ValueKind != JsonValueKind.Array)
+                {
+                    return null;
+                }
+
+                ChatRole? chatRole = itemElement.TryGetProperty("role", out var roleElement)
+                    ? ParseChatRole(roleElement.GetString())
+                    : null;
+
+                return new RealtimeContentItem(ParseContentItems(contentElements), id, chatRole);
+            }
+            else if (itemType == "function_call" &&
+                itemElement.TryGetProperty("name", out var nameElement) &&
+                itemElement.TryGetProperty("call_id", out var callerIdElement))
+            {
+                IDictionary<string, object?>? arguments = null;
+
+                if (itemElement.TryGetProperty("arguments", out var argumentsElement))
+                {
+                    if (argumentsElement.ValueKind == JsonValueKind.String)
+                    {
+                        string argumentsJson = argumentsElement.GetString()!;
+                        arguments = string.IsNullOrEmpty(argumentsJson) ? null : JsonSerializer.Deserialize<IDictionary<string, object?>>(argumentsJson);
+                    }
+                    else if (argumentsElement.ValueKind == JsonValueKind.Object)
+                    {
+                        arguments = new AdditionalPropertiesDictionary();
+                        foreach (var argProperty in argumentsElement.EnumerateObject())
+                        {
+                            arguments[argProperty.Name] = argProperty.Value.GetString();
+                        }
+                    }
+                }
+
+                return new RealtimeContentItem(
+                    [new FunctionCallContent(callerIdElement.GetString()!, nameElement.GetString()!, arguments)],
+                    id,
+                    null);
+            }
+
             return null;
         }
 
-        // Helper methods to create RealtimeServerMessage objects
-        private RealtimeServerErrorMessage? CreateErrorMessage(string jsonMessage)
+        #endregion
+
+        #region Message Creation Methods
+
+        private static RealtimeServerErrorMessage? CreateErrorMessage(JsonElement root)
         {
-            try
-            {
-                var jsonDoc = JsonDocument.Parse(jsonMessage);
-                var root = jsonDoc.RootElement;
-
-                // Parse the error object
-                if (!root.TryGetProperty("error", out var errorElement) || !errorElement.TryGetProperty("message", out var messageElement))
-                {
-                    return null;
-                }
-
-                RealtimeServerErrorMessage realtimeServerErrorMessage = new RealtimeServerErrorMessage();
-                realtimeServerErrorMessage.Error = new ErrorContent(messageElement.GetString());
-
-                if (errorElement.TryGetProperty("code", out var codeElement))
-                {
-                    realtimeServerErrorMessage.Error.ErrorCode = codeElement.GetString();
-                }
-
-                if (errorElement.TryGetProperty("event_id", out var errorEventIdElement))
-                {
-                    realtimeServerErrorMessage.EventId = errorEventIdElement.GetString();
-                }
-
-                if (errorElement.TryGetProperty("param", out var paramElement))
-                {
-                    realtimeServerErrorMessage.Parameter = paramElement.GetString();
-                }
-
-                return realtimeServerErrorMessage;
-            }
-            catch
+            if (!root.TryGetProperty("error", out var errorElement) ||
+                !errorElement.TryGetProperty("message", out var messageElement))
             {
                 return null;
             }
+
+            var msg = new RealtimeServerErrorMessage
+            {
+                Error = new ErrorContent(messageElement.GetString())
+            };
+
+            if (errorElement.TryGetProperty("code", out var codeElement))
+                msg.Error.ErrorCode = codeElement.GetString();
+
+            if (root.TryGetProperty("event_id", out var eventIdElement))
+                msg.EventId = eventIdElement.GetString();
+
+            if (errorElement.TryGetProperty("param", out var paramElement))
+                msg.Parameter = paramElement.GetString();
+
+            return msg;
         }
 
-        private RealtimeServerInputAudioTranscriptionMessage? CreateInputAudioTranscriptionMessage(string jsonMessage)
+        private static RealtimeServerInputAudioTranscriptionMessage? CreateInputAudioTranscriptionMessage(JsonElement root, string messageType)
         {
-            try
+            RealtimeServerMessageType serverMessageType = messageType switch
             {
-                var jsonDoc = JsonDocument.Parse(jsonMessage);
-                var root = jsonDoc.RootElement;
+                "conversation.item.input_audio_transcription.delta" => RealtimeServerMessageType.InputAudioTranscriptionDelta,
+                "conversation.item.input_audio_transcription.completed" => RealtimeServerMessageType.InputAudioTranscriptionCompleted,
+                "conversation.item.input_audio_transcription.failed" => RealtimeServerMessageType.InputAudioTranscriptionFailed,
+                _ => throw new InvalidOperationException($"Unknown message type: {messageType}")
+            };
 
-                // Get type from root
-                string? messageType = null;
-                if (root.TryGetProperty("type", out var typeElement))
-                {
-                    messageType = typeElement.GetString();
-                }
+            var msg = new RealtimeServerInputAudioTranscriptionMessage(serverMessageType);
 
-                if (messageType is null)
-                {
-                    return null;
-                }
+            if (root.TryGetProperty("event_id", out var eventIdElement))
+                msg.EventId = eventIdElement.GetString();
 
-                RealtimeServerMessageType serverMessageType;
+            if (root.TryGetProperty("content_index", out var contentIndexElement))
+                msg.ContentIndex = contentIndexElement.GetInt32();
 
-                switch (messageType)
-                {
-                    case "conversation.item.input_audio_transcription.delta":
-                        serverMessageType = RealtimeServerMessageType.InputAudioTranscriptionDelta;
-                        break;
-                    case "conversation.item.input_audio_transcription.completed":
-                        serverMessageType = RealtimeServerMessageType.InputAudioTranscriptionCompleted;
-                        break;
-                    case "conversation.item.input_audio_transcription.failed":
-                        serverMessageType = RealtimeServerMessageType.InputAudioTranscriptionFailed;
-                        break;
-                    default:
-                        return null;
-                }
+            if (root.TryGetProperty("item_id", out var itemIdElement))
+                msg.ItemId = itemIdElement.GetString();
 
-                RealtimeServerInputAudioTranscriptionMessage realtimeServerInputAudioTranscriptionMessage = new RealtimeServerInputAudioTranscriptionMessage(serverMessageType);
+            if (root.TryGetProperty("delta", out var deltaElement))
+                msg.Transcription = deltaElement.GetString();
 
-                // Get event_id from root
-                if (root.TryGetProperty("event_id", out var eventIdElement))
-                {
-                    realtimeServerInputAudioTranscriptionMessage.EventId = eventIdElement.GetString();
-                }
+            if (msg.Transcription is null && root.TryGetProperty("transcript", out deltaElement))
+                msg.Transcription = deltaElement.GetString();
 
-                if (root.TryGetProperty("content_index", out var contentIndexElement))
-                {
-                    realtimeServerInputAudioTranscriptionMessage.ContentIndex = contentIndexElement.GetInt32();
-                }
+            if (root.TryGetProperty("error", out var errorElement) &&
+                errorElement.TryGetProperty("message", out var errorMsgElement))
+            {
+                var errorContent = new ErrorContent(errorMsgElement.GetString());
 
-                if (root.TryGetProperty("item_id", out var itemIdElement))
-                {
-                    realtimeServerInputAudioTranscriptionMessage.ItemId = itemIdElement.GetString();
-                }
+                if (errorElement.TryGetProperty("code", out var errorCodeElement))
+                    errorContent.ErrorCode = errorCodeElement.GetString();
 
-                // For delta messages
-                if (root.TryGetProperty("delta", out var deltaElement))
-                {
-                    realtimeServerInputAudioTranscriptionMessage.Transcription = deltaElement.GetString();
-                }
+                if (errorElement.TryGetProperty("param", out var errorParamElement))
+                    errorContent.Details = errorParamElement.GetString();
 
-                // For completed messages
-                if (realtimeServerInputAudioTranscriptionMessage.Transcription is null && root.TryGetProperty("transcript", out deltaElement))
-                {
-                    realtimeServerInputAudioTranscriptionMessage.Transcription = deltaElement.GetString();
-                }
-
-                // For failed messages
-                if (root.TryGetProperty("error", out var errorElement) && errorElement.TryGetProperty("message", out var errorMsgElement))
-                {
-                    var errorContent = new ErrorContent(errorMsgElement.GetString());
-
-                    if (errorElement.TryGetProperty("code", out var errorCodeElement))
-                    {
-                        errorContent.ErrorCode = errorCodeElement.GetString();
-                    }
-
-                    if (errorElement.TryGetProperty("param", out var errorParamElement))
-                    {
-                        errorContent.Details = errorParamElement.GetString();
-                    }
-
-                    realtimeServerInputAudioTranscriptionMessage.Error = errorContent;
-                }
-
-                //if (root.TryGetProperty("logprobs", out var logProbElement) && logProbElement.ValueKind == JsonValueKind.Array)
-                //{
-                //    List<LogProbability> logProbabilities = new List<LogProbability>();
-
-                //    foreach (var logProbItem in logProbElement.EnumerateArray())
-                //    {
-                //        LogProbability logProbability = new LogProbability();
-
-                //        if (logProbItem.TryGetProperty("logprob", out var logProbValue))
-                //        {
-                //            logProbability.Value = logProbValue.GetDouble();
-                //        }
-
-                //        if (logProbItem.TryGetProperty("token", out var tokenValue))
-                //        {
-                //            logProbability.Token = tokenValue.GetString();
-                //        }
-
-                //        if (logProbItem.TryGetProperty("bytes", out var bytesValue) && bytesValue.ValueKind == JsonValueKind.Array)
-                //        {
-                //            List<byte> bytesList = new List<byte>();
-                //            foreach (var byteItem in bytesValue.EnumerateArray())
-                //            {
-                //                if (byteItem.TryGetByte(out var byteVal))
-                //                {
-                //                    bytesList.Add(byteVal);
-                //                }
-                //            }
-                //            logProbability.Bytes = bytesList;
-                //        }
-                //    }
-
-                //    realtimeServerInputAudioTranscriptionMessage.LogProbabilities = logProbabilities;
-                //}
-
-                if (root.TryGetProperty("usage", out var usageElement) &&
-                    usageElement.TryGetProperty("type", out var usageTypeElement) &&
-                    usageTypeElement.GetString() == "tokens")
-                {
-                    UsageDetails usageData = new UsageDetails();
-
-                    if (usageElement.TryGetProperty("input_tokens", out var inputTokensElement))
-                    {
-                        usageData.InputTokenCount = inputTokensElement.GetInt32();
-                    }
-
-                    if (usageElement.TryGetProperty("output_tokens", out var outputTokensElement))
-                    {
-                        usageData.OutputTokenCount = outputTokensElement.GetInt32();
-                    }
-
-                    if (usageElement.TryGetProperty("total_tokens", out var totalTokensElement))
-                    {
-                        usageData.TotalTokenCount = totalTokensElement.GetInt32();
-                    }
-
-                    if (usageElement.TryGetProperty("input_token_details", out var inputTokenDetailsElement) &&
-                        inputTokenDetailsElement.ValueKind == JsonValueKind.Object)
-                    {
-                        if (inputTokenDetailsElement.TryGetProperty("audio_tokens", out var audioTokensElement))
-                        {
-                            usageData.InputAudioTokenCount = audioTokensElement.GetInt32();
-                        }
-
-                        if (inputTokenDetailsElement.TryGetProperty("text_tokens", out var textTokensElement))
-                        {
-                            usageData.InputTextTokenCount = textTokensElement.GetInt32();
-                        }
-                    }
-
-                    realtimeServerInputAudioTranscriptionMessage.Usage = usageData;
-                }
-
-                // Deserialize the reconstructed JSON
-                return realtimeServerInputAudioTranscriptionMessage;
+                msg.Error = errorContent;
             }
-            catch
+
+            if (root.TryGetProperty("usage", out var usageElement))
+                msg.Usage = ParseUsageDetails(usageElement, requireTypeCheck: true);
+
+            return msg;
+        }
+
+        private static RealtimeServerOutputTextAudioMessage? CreateOutputTextAudioMessage(JsonElement root, string messageType)
+        {
+            RealtimeServerMessageType serverMessageType = messageType switch
             {
+                "response.output_audio.delta" => RealtimeServerMessageType.OutputAudioDelta,
+                "response.output_audio.done" => RealtimeServerMessageType.OutputAudioDone,
+                "response.output_audio_transcript.delta" => RealtimeServerMessageType.OutputAudioTranscriptionDelta,
+                "response.output_audio_transcript.done" => RealtimeServerMessageType.OutputAudioTranscriptionDone,
+                _ => throw new InvalidOperationException($"Unknown message type: {messageType}")
+            };
+
+            var msg = new RealtimeServerOutputTextAudioMessage(serverMessageType);
+
+            if (root.TryGetProperty("event_id", out var eventIdElement))
+                msg.EventId = eventIdElement.GetString();
+
+            if (root.TryGetProperty("response_id", out var responseIdElement))
+                msg.ResponseId = responseIdElement.GetString();
+
+            if (root.TryGetProperty("item_id", out var itemIdElement))
+                msg.ItemId = itemIdElement.GetString();
+
+            if (root.TryGetProperty("output_index", out var outputIndexElement))
+                msg.OutputIndex = outputIndexElement.GetInt32();
+
+            if (root.TryGetProperty("content_index", out var contentIndexElement))
+                msg.ContentIndex = contentIndexElement.GetInt32();
+
+            if (root.TryGetProperty("delta", out var deltaElement))
+                msg.Text = deltaElement.GetString();
+
+            if (msg.Text is null && root.TryGetProperty("transcript", out deltaElement))
+                msg.Text = deltaElement.GetString();
+
+            return msg;
+        }
+
+        private static RealtimeServerResponseOutputItemMessage? CreateResponseOutItemMessage(JsonElement root, string messageType)
+        {
+            RealtimeServerMessageType serverMessageType = messageType switch
+            {
+                "response.output_item.added" => RealtimeServerMessageType.ResponseCreated,
+                "response.output_item.done" => RealtimeServerMessageType.ResponseDone,
+                _ => throw new InvalidOperationException($"Unknown message type: {messageType}")
+            };
+
+            var msg = new RealtimeServerResponseOutputItemMessage(serverMessageType);
+
+            if (root.TryGetProperty("event_id", out var eventIdElement))
+                msg.EventId = eventIdElement.GetString();
+
+            if (root.TryGetProperty("response_id", out var responseIdElement))
+                msg.ResponseId = responseIdElement.GetString();
+
+            if (root.TryGetProperty("output_index", out var outputIndexElement))
+                msg.OutputIndex = outputIndexElement.GetInt32();
+
+            if (root.TryGetProperty("item", out var itemElement))
+                msg.Item = ParseRealtimeContentItem(itemElement);
+
+            return msg;
+        }
+
+        private static RealtimeServerResponseCreatedMessage? CreateResponseCreatedMessage(JsonElement root, string messageType)
+        {
+            RealtimeServerMessageType serverMessageType = messageType switch
+            {
+                "response.created" => RealtimeServerMessageType.ResponseCreated,
+                "response.done" => RealtimeServerMessageType.ResponseDone,
+                _ => throw new InvalidOperationException($"Unknown message type: {messageType}")
+            };
+
+            if (!root.TryGetProperty("response", out var responseElement))
                 return null;
-            }
-        }
 
-        private RealtimeServerOutputTextAudioMessage? CreateOutputTextAudioMessage(string jsonMessage)
-        {
-            try
+            var msg = new RealtimeServerResponseCreatedMessage(serverMessageType);
+
+            if (root.TryGetProperty("event_id", out var eventIdElement))
+                msg.EventId = eventIdElement.GetString();
+
+            if (responseElement.TryGetProperty("audio", out var responseAudioElement) &&
+                responseAudioElement.ValueKind == JsonValueKind.Object &&
+                responseAudioElement.TryGetProperty("output", out var outputElement) &&
+                outputElement.ValueKind == JsonValueKind.Object)
             {
-                var jsonDoc = JsonDocument.Parse(jsonMessage);
-                var root = jsonDoc.RootElement;
-
-                // Get type from root
-                string? messageType = null;
-                if (root.TryGetProperty("type", out var typeElement))
+                if (outputElement.TryGetProperty("format", out var formatElement) &&
+                    formatElement.TryGetProperty("type", out var formatTypeElement))
                 {
-                    messageType = typeElement.GetString();
-                }
-
-                if (messageType is null)
-                {
-                    return null;
-                }
-
-                RealtimeServerMessageType serverMessageType;
-
-                switch (messageType)
-                {
-                    case "response.output_audio.delta":
-                        serverMessageType = RealtimeServerMessageType.OutputAudioDelta;
-                        break;
-                    case "response.output_audio.done":
-                        serverMessageType = RealtimeServerMessageType.OutputAudioDone;
-                        break;
-                    case "response.output_audio_transcript.delta":
-                        serverMessageType = RealtimeServerMessageType.OutputAudioTranscriptionDelta;
-                        break;
-                    case "response.output_audio_transcript.done":
-                        serverMessageType = RealtimeServerMessageType.OutputAudioTranscriptionDone;
-                        break;
-                    default:
-                        return null;
-                }
-
-                RealtimeServerOutputTextAudioMessage realtimeServerOutputTextAudioMessage = new RealtimeServerOutputTextAudioMessage(serverMessageType);
-
-                // Get event_id from root
-                if (root.TryGetProperty("event_id", out var eventIdElement))
-                {
-                    realtimeServerOutputTextAudioMessage.EventId = eventIdElement.GetString();
-                }
-
-                // Extract properties based on message type
-                if (root.TryGetProperty("response_id", out var responseIdElement))
-                {
-                    realtimeServerOutputTextAudioMessage.ResponseId = responseIdElement.GetString();
-                }
-
-                if (root.TryGetProperty("item_id", out var itemIdElement))
-                {
-                    realtimeServerOutputTextAudioMessage.ItemId = itemIdElement.GetString();
-                }
-
-                if (root.TryGetProperty("output_index", out var outputIndexElement))
-                {
-                    realtimeServerOutputTextAudioMessage.OutputIndex = outputIndexElement.GetInt32();
-                }
-
-                if (root.TryGetProperty("content_index", out var contentIndexElement))
-                {
-                    realtimeServerOutputTextAudioMessage.ContentIndex = contentIndexElement.GetInt32();
-                }
-
-                if (root.TryGetProperty("delta", out var deltaElement))
-                {
-                    realtimeServerOutputTextAudioMessage.Text = deltaElement.GetString();
-                }
-
-                if (realtimeServerOutputTextAudioMessage.Text is null && root.TryGetProperty("transcript", out deltaElement))
-                {
-                    realtimeServerOutputTextAudioMessage.Text = deltaElement.GetString();
-                }
-
-                // Deserialize the reconstructed JSON
-                return realtimeServerOutputTextAudioMessage;
-            }
-            catch
-            {
-                return null;
-            }
-        }
-
-        private RealtimeServerResponseOutputItemMessage? CreateResponseOutItemMessage(string jsonMessage)
-        {
-            try
-            {
-                var jsonDoc = JsonDocument.Parse(jsonMessage);
-                var root = jsonDoc.RootElement;
-
-                // Get type from root
-                string? messageType = null;
-                if (root.TryGetProperty("type", out var typeElement))
-                {
-                    messageType = typeElement.GetString();
-                }
-
-                if (messageType is null)
-                {
-                    return null;
-                }
-
-                RealtimeServerMessageType serverMessageType;
-                if (messageType == "response.output_item.added")
-                {
-                    serverMessageType = RealtimeServerMessageType.ResponseCreated;
-                }
-                else if (messageType == "response.output_item.done")
-                {
-                    serverMessageType = RealtimeServerMessageType.ResponseDone;
-                }
-                else
-                {
-                    return null;
-                }
-
-                RealtimeServerResponseOutputItemMessage realtimeServerResponseOutputItemMessage = new RealtimeServerResponseOutputItemMessage(serverMessageType);
-
-                // Get event_id from root
-                if (root.TryGetProperty("event_id", out var eventIdElement))
-                {
-                    realtimeServerResponseOutputItemMessage.EventId = eventIdElement.GetString();
-                }
-
-                // Extract properties based on message type
-                if (root.TryGetProperty("response_id", out var responseIdElement))
-                {
-                    realtimeServerResponseOutputItemMessage.ResponseId = responseIdElement.GetString();
-                }
-
-                if (root.TryGetProperty("output_index", out var outputIndexElement))
-                {
-                    realtimeServerResponseOutputItemMessage.OutputIndex = outputIndexElement.GetInt32();
-                }
-
-                // Parse response object
-                if (root.TryGetProperty("item", out var itemElement) && itemElement.TryGetProperty("type", out var itemTypeElement))
-                {
-                    List<AIContent> contentList = new List<AIContent>();
-
-                    string? id = null;
-                    if (itemElement.TryGetProperty("id", out var outputIdElement))
+                    string? formatType = formatTypeElement.GetString();
+                    msg.OutputAudioOptions = formatType switch
                     {
-                        id = outputIdElement.GetString();
-                    }
-
-                    if (itemTypeElement.GetString() == "message")
-                    {
-                        if (itemElement.TryGetProperty("content", out var contentElements) && contentElements.ValueKind == JsonValueKind.Array)
-                        {
-                            ChatRole? chatRole = null;
-                            if (itemElement.TryGetProperty("role", out var outputRoleElement))
-                            {
-                                string? roleString = outputRoleElement.GetString();
-                                if (roleString == "assistant")
-                                {
-                                    chatRole = ChatRole.Assistant;
-                                }
-                                else if (roleString == "user")
-                                {
-                                    chatRole = ChatRole.User;
-                                }
-                                else if (roleString == "system")
-                                {
-                                    chatRole = ChatRole.System;
-                                }
-                            }
-
-                            foreach (var contentElement in contentElements.EnumerateArray())
-                            {
-                                if (contentElement.TryGetProperty("type", out var contentTypeElement))
-                                {
-                                    string? contentType = contentTypeElement.GetString();
-                                    if (contentType == "input_text" && contentTypeElement.TryGetProperty("text", out var textElement))
-                                    {
-                                        contentList.Add(new TextContent(textElement.GetString()));
-                                    }
-                                    else if (contentType == "input_text" && contentTypeElement.TryGetProperty("transcript", out var transcriptElement))
-                                    {
-                                        contentList.Add(new TextContent(transcriptElement.GetString()));
-                                    }
-                                    else if (contentType == "input_audio" && contentTypeElement.TryGetProperty("audio", out var audioDataElement))
-                                    {
-                                        contentList.Add(new DataContent($"data:audio/pcm;base64,{audioDataElement.GetString()}"));
-                                    }
-                                    else if (contentType == "input_image" && contentTypeElement.TryGetProperty("image_url", out var imageUrlElement))
-                                    {
-                                        contentList.Add(new DataContent(imageUrlElement.GetString()!));
-                                    }
-                                }
-                            }
-
-                            realtimeServerResponseOutputItemMessage.Item = new RealtimeContentItem(contentList, id, chatRole);
-                        }
-                    }
-                    else if (itemTypeElement.GetString() == "function_call" &&
-                        itemElement.TryGetProperty("name", out var nameElement) &&
-                        itemElement.TryGetProperty("call_id", out var callerIdElement) &&
-                        callerIdElement.ToString() is not null && 
-                        itemElement.TryGetProperty("arguments", out var argumentsElement) && 
-                        argumentsElement.ValueKind == JsonValueKind.String)
-                    {
-                        string argumentsJson = argumentsElement.GetString()!;
-                        IDictionary<string, object?>? arguments = string.IsNullOrEmpty(argumentsJson) ? null : JsonSerializer.Deserialize<IDictionary<string, object?>>(argumentsJson);
-                        contentList.Add(new FunctionCallContent(callerIdElement.GetString()!, nameElement.ToString(), arguments));
-                        realtimeServerResponseOutputItemMessage.Item = new RealtimeContentItem(contentList, id, null);
-                    }
-                }
-
-                return realtimeServerResponseOutputItemMessage;
-            }
-            catch
-            {
-                return null;
-            }
-        }
-
-        private RealtimeServerResponseCreatedMessage? CreateResponseCreatedMessage(string jsonMessage)
-        {
-            try
-            {
-                var jsonDoc = JsonDocument.Parse(jsonMessage);
-                var root = jsonDoc.RootElement;
-
-                // Get type from root
-                string? messageType = null;
-                if (root.TryGetProperty("type", out var typeElement))
-                {
-                    messageType = typeElement.GetString();
-                }
-
-                if (messageType is null)
-                {
-                    return null;
-                }
-
-                RealtimeServerMessageType serverMessageType;
-                JsonElement responseElement = default;
-                if (messageType == "response.created")
-                {
-                    serverMessageType = RealtimeServerMessageType.ResponseCreated;
-                }
-                else if (messageType == "response.done")
-                {
-                    serverMessageType = RealtimeServerMessageType.ResponseDone;
-                }
-                else
-                {
-                    return null;
-                }
-
-                if (!root.TryGetProperty("response", out responseElement))
-                {
-                    return null;
-                }
-
-                RealtimeServerResponseCreatedMessage realtimeServerResponseCreatedMessage = new RealtimeServerResponseCreatedMessage(serverMessageType);
-
-                // Get event_id from root
-                if (root.TryGetProperty("event_id", out var eventIdElement))
-                {
-                    realtimeServerResponseCreatedMessage.EventId = eventIdElement.GetString();
-                }
-
-                // Parse response object
-                if (responseElement.TryGetProperty("audio", out var responseAudioElement) && responseAudioElement.ValueKind == JsonValueKind.Object &&
-                    responseAudioElement.TryGetProperty("output", out var outputElement) && outputElement.ValueKind == JsonValueKind.Object)
-                {
-                    if (outputElement.TryGetProperty("format", out var formatElement) &&
-                        formatElement.TryGetProperty("type", out var formatTypeElement))
-                    {
-                        string? formatType = formatTypeElement.GetString();
-                        if (formatType == "audio/pcma" || formatType == "audio/pcmu")
-                        {
-                            realtimeServerResponseCreatedMessage.OutputAudioOptions = new RealtimeAudioFormat(formatType, 0);
-                        }
-                        else if (formatType == "audio/pcm")
-                        {
-                            realtimeServerResponseCreatedMessage.OutputAudioOptions = new RealtimeAudioFormat("audio/pcm", 24000);
-                        }
-                    }
-
-                    if (outputElement.TryGetProperty("voice", out var voiceElement))
-                    {
-                        realtimeServerResponseCreatedMessage.OutputVoice = voiceElement.GetString();
-                    }
-                }
-
-                if (responseElement.TryGetProperty("conversation_id", out var conversationIdElement))
-                {
-                    realtimeServerResponseCreatedMessage.ConversationId = conversationIdElement.GetString();
-                }
-
-                if (responseElement.TryGetProperty("id", out var idElement))
-                {
-                    realtimeServerResponseCreatedMessage.ResponseId = idElement.GetString();
-                }
-
-                if (responseElement.TryGetProperty("max_output_tokens", out var maxOutputTokensElement))
-                {
-                    if (maxOutputTokensElement.ValueKind == JsonValueKind.Number)
-                    {
-                        realtimeServerResponseCreatedMessage.MaxOutputTokens = maxOutputTokensElement.GetInt32();
-                    }
-                    else if (maxOutputTokensElement.ValueKind == JsonValueKind.String && maxOutputTokensElement.GetString() == "inf")
-                    {
-                        realtimeServerResponseCreatedMessage.MaxOutputTokens = int.MaxValue;
-                    }
-                }
-
-                if (responseElement.TryGetProperty("metadata", out var metadataElement) && metadataElement.ValueKind == JsonValueKind.Object)
-                {
-                    var metadataDict = new AdditionalPropertiesDictionary();
-
-                    foreach (var property in metadataElement.EnumerateObject())
-                    {
-                        metadataDict[property.Name] = property.Value.GetString();
-                    }
-
-                    realtimeServerResponseCreatedMessage.Metadata = metadataDict;
-                }
-
-                if (responseElement.TryGetProperty("output_modalities", out var outputModalitiesElement) && outputModalitiesElement.ValueKind == JsonValueKind.Array)
-                {
-                    List<string> modalities = new List<string>();
-                    foreach (var modalityItem in outputModalitiesElement.EnumerateArray())
-                    {
-                        string? modalitiesItem = modalityItem.GetString();
-                        if (!string.IsNullOrEmpty(modalitiesItem))
-                        {
-                            modalities.Add(modalitiesItem);
-                        }
-                    }
-
-                    if (modalities.Count > 0)
-                    {
-                        realtimeServerResponseCreatedMessage.OutputModalities = modalities;
-                    }
-                }
-
-                if (responseElement.TryGetProperty("status", out var statusElement))
-                {
-                    realtimeServerResponseCreatedMessage.Status = statusElement.GetString();
-                }
-
-                if (responseElement.TryGetProperty("status_details", out var statusDetailsElement) && statusDetailsElement.ValueKind == JsonValueKind.Object &&
-                    statusDetailsElement.TryGetProperty("error", out var errorElement) && errorElement.ValueKind == JsonValueKind.Object &&
-                    errorElement.TryGetProperty("type", out var errorTypeElement) && errorTypeElement.ValueKind == JsonValueKind.String &&
-                    errorElement.TryGetProperty("code", out var errorCodeElement) && errorCodeElement.ValueKind == JsonValueKind.String)
-                {
-                    realtimeServerResponseCreatedMessage.Error = new ErrorContent(errorTypeElement.GetString())
-                    {
-                        ErrorCode = errorCodeElement.GetString()
+                        "audio/pcma" or "audio/pcmu" => new RealtimeAudioFormat(formatType, 0),
+                        "audio/pcm" => new RealtimeAudioFormat("audio/pcm", 24000),
+                        _ => null
                     };
                 }
 
-                // Get usage information
-                if (responseElement.TryGetProperty("usage", out var usageElement) && usageElement.ValueKind == JsonValueKind.Object)
-                {
-                    var usageData = new UsageDetails();
-
-                    if (usageElement.TryGetProperty("input_tokens", out var inputTokensElement))
-                    {
-                        usageData.InputTokenCount = inputTokensElement.GetInt32();
-                    }
-
-                    if (usageElement.TryGetProperty("output_tokens", out var outputTokensElement))
-                    {
-                        usageData.OutputTokenCount = outputTokensElement.GetInt32();
-                    }
-
-                    if (usageElement.TryGetProperty("total_tokens", out var totalTokensElement))
-                    {
-                        usageData.TotalTokenCount = totalTokensElement.GetInt32();
-                    }
-
-                    if (usageElement.TryGetProperty("input_token_details", out var inputTokenDetailsElement))
-                    {
-                        if (inputTokenDetailsElement.TryGetProperty("audio_tokens", out var audioTokensElement))
-                        {
-                            usageData.InputAudioTokenCount = audioTokensElement.GetInt32();
-                        }
-
-                        if (inputTokenDetailsElement.TryGetProperty("text_tokens", out var textTokensElement))
-                        {
-                            usageData.InputTextTokenCount = textTokensElement.GetInt32();
-                        }
-                    }
-
-                    if (usageElement.TryGetProperty("output_token_details", out var outputTokenDetailsElement))
-                    {
-                        if (outputTokenDetailsElement.TryGetProperty("audio_tokens", out var audioTokensElement))
-                        {
-                            usageData.OutputAudioTokenCount = audioTokensElement.GetInt32();
-                        }
-
-                        if (outputTokenDetailsElement.TryGetProperty("text_tokens", out var textTokensElement))
-                        {
-                            usageData.OutputTextTokenCount = textTokensElement.GetInt32();
-                        }
-                    }
-
-                    realtimeServerResponseCreatedMessage.Usage = usageData;
-                }
-
-                if (responseElement.TryGetProperty("output", out outputElement) && outputElement.ValueKind == JsonValueKind.Array)
-                {
-                    List<RealtimeContentItem> outputItems = new List<RealtimeContentItem>();
-
-                    foreach (var outputItemElement in outputElement.EnumerateArray())
-                    {
-                        if (!outputItemElement.TryGetProperty("type", out var outputTypeElement))
-                        {
-                            continue;
-                        }
-
-                        string? id = null;
-                        if (outputItemElement.TryGetProperty("id", out var outputIdElement))
-                        {
-                            id = outputIdElement.GetString();
-                        }
-
-                        if (outputTypeElement.GetString() == "message")
-                        {
-                            if (!outputItemElement.TryGetProperty("content", out var contentElements) || contentElements.ValueKind != JsonValueKind.Array)
-                            {
-                                continue;
-                            }
-
-                            ChatRole? chatRole = null;
-                            if (outputItemElement.TryGetProperty("role", out var outputRoleElement))
-                            {
-                                string? roleString = outputRoleElement.GetString();
-                                if (roleString == "assistant")
-                                {
-                                    chatRole = ChatRole.Assistant;
-                                }
-                                else if (roleString == "user")
-                                {
-                                    chatRole = ChatRole.User;
-                                }
-                                else if (roleString == "system")
-                                {
-                                    chatRole = ChatRole.System;
-                                }
-                            }
-
-                            foreach (var contentElement in contentElements.EnumerateArray())
-                            {
-                                if (!contentElement.TryGetProperty("type", out var contentTypeElement))
-                                {
-                                    // To do: Support other content types as needed
-                                    continue;
-                                }
-
-                                string? contentType = contentTypeElement.GetString();
-                                if (contentType == "input_text" && contentTypeElement.TryGetProperty("text", out var textElement))
-                                {
-                                    outputItems.Add(new RealtimeContentItem(new[] { new TextContent(textElement.GetString()) }, id, chatRole));
-                                }
-                                else if (contentType == "input_text" && contentTypeElement.TryGetProperty("transcript", out var transcriptElement))
-                                {
-                                    outputItems.Add(new RealtimeContentItem(new[] { new TextContent(transcriptElement.GetString()) }, id, chatRole));
-                                }
-                                else if (contentType == "input_audio" && contentTypeElement.TryGetProperty("audio", out var audioDataElement))
-                                {
-                                    outputItems.Add(new RealtimeContentItem(new[] { new DataContent($"data:audio/pcm;base64,{audioDataElement.GetString()}") }, id, chatRole));
-                                }
-                                else if (contentType == "input_image" && contentTypeElement.TryGetProperty("image_url", out var imageUrlElement))
-                                {
-                                    outputItems.Add(new RealtimeContentItem(new[] { new DataContent(imageUrlElement.GetString()!) }, id, chatRole));
-                                }
-                            }
-                        }
-                        else if (outputTypeElement.GetString() == "function_call" &&
-                            outputItemElement.TryGetProperty("name", out var nameElement) &&
-                            outputItemElement.TryGetProperty("call_id", out var callerIdElement) &&
-                            callerIdElement.ToString() is not null)
-                        {
-                            IDictionary<string, object?> arguments = new AdditionalPropertiesDictionary();
-                            if (outputItemElement.TryGetProperty("arguments", out var argumentsElement))
-                            {
-                                if (argumentsElement.ValueKind == JsonValueKind.Object)
-                                {
-                                    foreach (var argProperty in argumentsElement.EnumerateObject())
-                                    {
-                                        arguments[argProperty.Name] = argProperty.Value.GetString();
-                                    }
-                                }
-                            }
-                            
-                            outputItems.Add(new RealtimeContentItem(new[] { new FunctionCallContent(callerIdElement.GetString()!, nameElement.ToString(), arguments) }, id));
-                        }
-                    }
-
-                    realtimeServerResponseCreatedMessage.Items = outputItems;
-                }
-
-                return realtimeServerResponseCreatedMessage;
+                if (outputElement.TryGetProperty("voice", out var voiceElement))
+                    msg.OutputVoice = voiceElement.GetString();
             }
-            catch
+
+            if (responseElement.TryGetProperty("conversation_id", out var conversationIdElement))
+                msg.ConversationId = conversationIdElement.GetString();
+
+            if (responseElement.TryGetProperty("id", out var idElement))
+                msg.ResponseId = idElement.GetString();
+
+            if (responseElement.TryGetProperty("max_output_tokens", out var maxOutputTokensElement))
             {
-                return null;
+                msg.MaxOutputTokens = maxOutputTokensElement.ValueKind == JsonValueKind.Number
+                    ? maxOutputTokensElement.GetInt32()
+                    : maxOutputTokensElement.ValueKind == JsonValueKind.String && maxOutputTokensElement.GetString() == "inf"
+                        ? int.MaxValue
+                        : null;
             }
+
+            if (responseElement.TryGetProperty("metadata", out var metadataElement) &&
+                metadataElement.ValueKind == JsonValueKind.Object)
+            {
+                var metadataDict = new AdditionalPropertiesDictionary();
+                foreach (var property in metadataElement.EnumerateObject())
+                {
+                    metadataDict[property.Name] = property.Value.GetString();
+                }
+                msg.Metadata = metadataDict;
+            }
+
+            if (responseElement.TryGetProperty("output_modalities", out var outputModalitiesElement) &&
+                outputModalitiesElement.ValueKind == JsonValueKind.Array)
+            {
+                var modalities = new List<string>();
+                foreach (var modalityItem in outputModalitiesElement.EnumerateArray())
+                {
+                    if (modalityItem.GetString() is string m && !string.IsNullOrEmpty(m))
+                        modalities.Add(m);
+                }
+                if (modalities.Count > 0)
+                    msg.OutputModalities = modalities;
+            }
+
+            if (responseElement.TryGetProperty("status", out var statusElement))
+                msg.Status = statusElement.GetString();
+
+            if (responseElement.TryGetProperty("status_details", out var statusDetailsElement) &&
+                statusDetailsElement.ValueKind == JsonValueKind.Object &&
+                statusDetailsElement.TryGetProperty("error", out var errorElement) &&
+                errorElement.ValueKind == JsonValueKind.Object &&
+                errorElement.TryGetProperty("type", out var errorTypeElement) &&
+                errorElement.TryGetProperty("code", out var errorCodeElement))
+            {
+                msg.Error = new ErrorContent(errorTypeElement.GetString())
+                {
+                    ErrorCode = errorCodeElement.GetString()
+                };
+            }
+
+            if (responseElement.TryGetProperty("usage", out var usageElement))
+                msg.Usage = ParseUsageDetails(usageElement);
+
+            if (responseElement.TryGetProperty("output", out outputElement) &&
+                outputElement.ValueKind == JsonValueKind.Array)
+            {
+                var outputItems = new List<RealtimeContentItem>();
+                foreach (var outputItemElement in outputElement.EnumerateArray())
+                {
+                    if (ParseRealtimeContentItem(outputItemElement) is RealtimeContentItem item)
+                        outputItems.Add(item);
+                }
+                msg.Items = outputItems;
+            }
+
+            return msg;
         }
+
+        #endregion
     }
 
-    // Event args for server events
     public class ServerEventArgs : EventArgs
     {
         public string EventType { get; set; } = string.Empty;
