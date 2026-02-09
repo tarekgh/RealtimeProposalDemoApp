@@ -77,8 +77,10 @@ namespace RealtimePlayGround
         private CancellationTokenSource? _cancellationTokenSource;
         private readonly string _apiKey;
         private readonly string _model;
+        private readonly SemaphoreSlim _sendLock = new(1, 1);
         private bool _isConnected;
-        private readonly StringBuilder _partialMessageBuilder = new();
+        private bool _disposed;
+
         private Channel<RealtimeServerMessage>? _eventChannel;
         private RealtimeSessionOptions? _options;
 
@@ -630,18 +632,39 @@ namespace RealtimePlayGround
 
         private async Task SendEventAsync(JsonObject eventData)
         {
-            if (_webSocket?.State != WebSocketState.Open)
+            if (_disposed || _webSocket?.State != WebSocketState.Open)
             {
-                ErrorOccurred?.Invoke(this, "WebSocket is not connected");
                 return;
             }
 
             try
             {
                 var json = eventData.ToJsonString();
-                var bytes = Encoding.UTF8.GetBytes(json);
-                await _webSocket.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, CancellationToken.None);
+                await _sendLock.WaitAsync(_cancellationTokenSource?.Token ?? CancellationToken.None);
+                try
+                {
+                    var byteCount = Encoding.UTF8.GetByteCount(json);
+                    var bytes = ArrayPool<byte>.Shared.Rent(byteCount);
+                    try
+                    {
+                        var written = Encoding.UTF8.GetBytes(json, 0, json.Length, bytes, 0);
+                        await _webSocket.SendAsync(
+                            new ArraySegment<byte>(bytes, 0, written),
+                            WebSocketMessageType.Text,
+                            true,
+                            _cancellationTokenSource?.Token ?? CancellationToken.None);
+                    }
+                    finally
+                    {
+                        ArrayPool<byte>.Shared.Return(bytes);
+                    }
+                }
+                finally
+                {
+                    _sendLock.Release();
+                }
             }
+            catch (OperationCanceledException) { }
             catch (Exception ex)
             {
                 ErrorOccurred?.Invoke(this, $"Error sending event: {ex.Message}");
@@ -663,9 +686,39 @@ namespace RealtimePlayGround
                         break;
                     }
 
+                    string message;
+                    if (result.EndOfMessage)
+                    {
+                        // Fast path: single-frame message, no extra allocation
+                        message = Encoding.UTF8.GetString(buffer, 0, result.Count);
+                    }
+                    else
+                    {
+                        // Multi-frame: accumulate remaining frames
+                        using var ms = new System.IO.MemoryStream();
+                        ms.Write(buffer, 0, result.Count);
+                        do
+                        {
+                            result = await _webSocket.ReceiveAsync(new ArraySegment<byte>(buffer), cancellationToken);
+                            if (result.MessageType == WebSocketMessageType.Close)
+                            {
+                                break;
+                            }
+                            ms.Write(buffer, 0, result.Count);
+                        }
+                        while (!result.EndOfMessage);
+
+                        if (result.MessageType == WebSocketMessageType.Close)
+                        {
+                            await EndSessionAsync();
+                            break;
+                        }
+
+                        message = Encoding.UTF8.GetString(ms.GetBuffer(), 0, (int)ms.Length);
+                    }
+
                     if (result.MessageType == WebSocketMessageType.Text)
                     {
-                        var message = Encoding.UTF8.GetString(buffer, 0, result.Count);
                         ProcessServerEvent(message);
                     }
                 }
@@ -678,6 +731,9 @@ namespace RealtimePlayGround
             finally
             {
                 ArrayPool<byte>.Shared.Return(buffer);
+                _isConnected = false;
+                _eventChannel?.Writer.TryComplete();
+                SessionEnded?.Invoke(this, EventArgs.Empty);
             }
         }
 
@@ -685,64 +741,61 @@ namespace RealtimePlayGround
         {
             try
             {
-                if (_partialMessageBuilder.Length > 0)
-                {
-                    _partialMessageBuilder.Append(message);
-                    message = _partialMessageBuilder.ToString();
-                    _partialMessageBuilder.Clear();
-                }
+                using var jsonDoc = JsonDocument.Parse(message);
+                var root = jsonDoc.RootElement;
+                var eventType = root.GetProperty("type").GetString();
 
-                if (message.EndsWith('}'))
+                var eventArgs = new ServerEventArgs
                 {
-                    var jsonDoc = JsonDocument.Parse(message);
-                    var root = jsonDoc.RootElement;
-                    var eventType = root.GetProperty("type").GetString();
+                    EventType = eventType ?? "unknown",
+                    Data = root.Clone()
+                };
 
-                    var eventArgs = new ServerEventArgs
+                ServerEventReceived?.Invoke(this, eventArgs);
+
+                try
+                {
+                    var serverMessage = eventType switch
                     {
-                        EventType = eventType ?? "unknown",
-                        Data = jsonDoc
+                        "error" => CreateErrorMessage(root),
+                        "conversation.item.input_audio_transcription.delta" or
+                        "conversation.item.input_audio_transcription.completed" or
+                        "conversation.item.input_audio_transcription.failed" =>
+                            CreateInputAudioTranscriptionMessage(root, eventType),
+                        "response.output_audio_transcript.delta" or
+                        "response.output_audio_transcript.done" or
+                        "response.output_audio.delta" or
+                        "response.output_audio.done" =>
+                            CreateOutputTextAudioMessage(root, eventType),
+                        "response.created" or
+                        "response.done" =>
+                            CreateResponseCreatedMessage(root, eventType),
+                        "response.output_item.added" or
+                        "response.output_item.done" =>
+                            CreateResponseOutItemMessage(root, eventType),
+                        "session.created" or
+                        "session.updated" =>
+                            HandleSessionEvent(root, eventType),
+                        _ => new RealtimeServerMessage
+                        {
+                            Type = RealtimeServerMessageType.RawContentOnly,
+                            RawRepresentation = root.Clone()
+                        }
                     };
 
-                    ServerEventReceived?.Invoke(this, eventArgs);
-
-                    try
+                    if (serverMessage is not null)
                     {
-                        var serverMessage = eventType switch
-                        {
-                            "error" => CreateErrorMessage(root),
-                            "conversation.item.input_audio_transcription.delta" or
-                            "conversation.item.input_audio_transcription.completed" or
-                            "conversation.item.input_audio_transcription.failed" =>
-                                CreateInputAudioTranscriptionMessage(root, eventType),
-                            "response.output_audio_transcript.delta" or
-                            "response.output_audio_transcript.done" or
-                            "response.output_audio.delta" or
-                            "response.output_audio.done" =>
-                                CreateOutputTextAudioMessage(root, eventType),
-                            "response.created" or
-                            "response.done" =>
-                                CreateResponseCreatedMessage(root, eventType),
-                            "response.output_item.added" or
-                            "response.output_item.done" =>
-                                CreateResponseOutItemMessage(root, eventType),
-                            _ => new RealtimeServerMessage
-                            {
-                                Type = RealtimeServerMessageType.RawContentOnly,
-                                RawRepresentation = root.Clone()
-                            }
-                        };
-
-                        if (serverMessage is not null)
-                        {
-                            _eventChannel?.Writer.TryWrite(serverMessage);
-                        }
+                        _eventChannel?.Writer.TryWrite(serverMessage);
                     }
-                    catch { }
                 }
-                else
+                catch (Exception ex)
                 {
-                    _partialMessageBuilder.Append(message);
+                    ErrorOccurred?.Invoke(this, $"Error creating server message for '{eventType}': {ex.Message}");
+                    _eventChannel?.Writer.TryWrite(new RealtimeServerMessage
+                    {
+                        Type = RealtimeServerMessageType.RawContentOnly,
+                        RawRepresentation = root.Clone()
+                    });
                 }
             }
             catch (Exception ex)
@@ -753,8 +806,12 @@ namespace RealtimePlayGround
 
         public void Dispose()
         {
-            _eventChannel?.Writer.Complete();
-            _cancellationTokenSource?.Cancel();
+            if (_disposed)
+                return;
+            _disposed = true;
+
+            _eventChannel?.Writer.TryComplete();
+            try { _cancellationTokenSource?.Cancel(); } catch (ObjectDisposedException) { }
             _cancellationTokenSource?.Dispose();
             _webSocket?.Dispose();
         }
@@ -785,6 +842,46 @@ namespace RealtimePlayGround
 
         private static JsonArray CreateModalitiesArray(IEnumerable<string> modalities)
             => new([.. modalities.Select(m => JsonValue.Create(m))]);
+
+        private static RealtimeAudioFormat? ParseAudioFormat(JsonElement formatElement)
+        {
+            if (formatElement.ValueKind != JsonValueKind.Object ||
+                !formatElement.TryGetProperty("type", out var typeElement))
+                return null;
+
+            string? formatType = typeElement.GetString();
+            if (formatType is null)
+                return null;
+
+            int sampleRate = formatElement.TryGetProperty("rate", out var rateElement) && rateElement.ValueKind == JsonValueKind.Number
+                ? rateElement.GetInt32()
+                : 0;
+            return new RealtimeAudioFormat(formatType, sampleRate);
+        }
+
+        private static int? ParseMaxOutputTokens(JsonElement element)
+        {
+            return element.ValueKind == JsonValueKind.Number
+                ? element.GetInt32()
+                : element.ValueKind == JsonValueKind.String && element.GetString() == "inf"
+                    ? int.MaxValue
+                    : null;
+        }
+
+        private static List<string>? ParseOutputModalities(JsonElement element)
+        {
+            if (element.ValueKind != JsonValueKind.Array)
+                return null;
+
+            var modalities = new List<string>();
+            foreach (var item in element.EnumerateArray())
+            {
+                if (item.GetString() is string m && !string.IsNullOrEmpty(m))
+                    modalities.Add(m);
+            }
+
+            return modalities.Count > 0 ? modalities : null;
+        }
 
         private static JsonObject? SerializeAIFunctionToJson(AIFunction? aiFunction)
         {
@@ -972,7 +1069,9 @@ namespace RealtimePlayGround
                         arguments = new AdditionalPropertiesDictionary();
                         foreach (var argProperty in argumentsElement.EnumerateObject())
                         {
-                            arguments[argProperty.Name] = argProperty.Value.GetString();
+                            arguments[argProperty.Name] = argProperty.Value.ValueKind == JsonValueKind.String
+                                ? argProperty.Value.GetString()
+                                : JsonSerializer.Deserialize<object?>(argProperty.Value.GetRawText());
                         }
                     }
                 }
@@ -989,6 +1088,167 @@ namespace RealtimePlayGround
         #endregion
 
         #region Message Creation Methods
+
+        private RealtimeServerMessage? HandleSessionEvent(JsonElement root, string eventType)
+        {
+            if (root.TryGetProperty("session", out var sessionElement))
+            {
+                var newOptions = DeserializeSessionOptions(sessionElement);
+
+                // Preserve client-side properties that the server cannot round-trip
+                // as typed objects (tools are returned as JSON schemas, not AITool instances)
+                if (_options is not null)
+                {
+                    newOptions.Tools = _options.Tools;
+                    newOptions.AIFunction = _options.AIFunction;
+                    newOptions.HostedMcpServerTool = _options.HostedMcpServerTool;
+                    newOptions.ToolChoiceMode = _options.ToolChoiceMode;
+                    newOptions.EnableAutoTracing = _options.EnableAutoTracing;
+                    newOptions.TracingGroupId = _options.TracingGroupId;
+                    newOptions.TracingWorkflowName = _options.TracingWorkflowName;
+                    newOptions.TracingMetadata = _options.TracingMetadata;
+                }
+
+                _options = newOptions;
+            }
+
+            return new RealtimeServerMessage
+            {
+                Type = RealtimeServerMessageType.RawContentOnly,
+                RawRepresentation = root.Clone()
+            };
+        }
+
+        private static RealtimeSessionOptions DeserializeSessionOptions(JsonElement session)
+        {
+            var options = new RealtimeSessionOptions();
+
+            // Session kind (type)
+            if (session.TryGetProperty("type", out var typeElement))
+            {
+                options.SessionKind = typeElement.GetString() == "transcription"
+                    ? RealtimeSessionKind.Transcription
+                    : RealtimeSessionKind.Realtime;
+            }
+
+            // Model
+            if (session.TryGetProperty("model", out var modelElement))
+                options.Model = modelElement.GetString();
+
+            // Instructions
+            if (session.TryGetProperty("instructions", out var instructionsElement) &&
+                instructionsElement.ValueKind == JsonValueKind.String)
+                options.Instructions = instructionsElement.GetString();
+
+            // Max output tokens
+            if (session.TryGetProperty("max_output_tokens", out var maxTokensElement))
+                options.MaxOutputTokens = ParseMaxOutputTokens(maxTokensElement);
+
+            // Output modalities
+            if (session.TryGetProperty("output_modalities", out var modalitiesElement))
+                options.OutputModalities = ParseOutputModalities(modalitiesElement);
+
+            // Audio configuration
+            if (session.TryGetProperty("audio", out var audioElement) &&
+                audioElement.ValueKind == JsonValueKind.Object)
+            {
+                // Input audio
+                if (audioElement.TryGetProperty("input", out var inputElement) &&
+                    inputElement.ValueKind == JsonValueKind.Object)
+                {
+                    // Input audio format
+                    if (inputElement.TryGetProperty("format", out var inputFormatElement))
+                        options.InputAudioFormat = ParseAudioFormat(inputFormatElement);
+
+                    // Noise reduction
+                    if (inputElement.TryGetProperty("noise_reduction", out var noiseElement) &&
+                        noiseElement.ValueKind == JsonValueKind.Object &&
+                        noiseElement.TryGetProperty("type", out var noiseTypeElement))
+                    {
+                        options.NoiseReductionOptions = noiseTypeElement.GetString() switch
+                        {
+                            "near_field" => NoiseReductionOptions.NearField,
+                            "far_field" => NoiseReductionOptions.FarField,
+                            _ => null
+                        };
+                    }
+
+                    // Transcription
+                    if (inputElement.TryGetProperty("transcription", out var transcriptionElement) &&
+                        transcriptionElement.ValueKind == JsonValueKind.Object)
+                    {
+                        string? language = transcriptionElement.TryGetProperty("language", out var langElement) ? langElement.GetString() : null;
+                        string? model = transcriptionElement.TryGetProperty("model", out var modelEl) ? modelEl.GetString() : null;
+                        string? prompt = transcriptionElement.TryGetProperty("prompt", out var promptElement) ? promptElement.GetString() : null;
+
+                        if (language is not null && model is not null)
+                            options.TranscriptionOptions = new TranscriptionOptions(language, model, prompt);
+                    }
+
+                    // Turn detection (VAD)
+                    if (inputElement.TryGetProperty("turn_detection", out var turnDetectionElement) &&
+                        turnDetectionElement.ValueKind == JsonValueKind.Object &&
+                        turnDetectionElement.TryGetProperty("type", out var vadTypeElement))
+                    {
+                        string? vadType = vadTypeElement.GetString();
+                        if (vadType == "server_vad")
+                        {
+                            var serverVad = new ServerVoiceActivityDetection();
+                            if (turnDetectionElement.TryGetProperty("create_response", out var crElement))
+                                serverVad.CreateResponse = crElement.GetBoolean();
+                            if (turnDetectionElement.TryGetProperty("interrupt_response", out var irElement))
+                                serverVad.InterruptResponse = irElement.GetBoolean();
+                            if (turnDetectionElement.TryGetProperty("idle_timeout_ms", out var itElement) && itElement.ValueKind == JsonValueKind.Number)
+                                serverVad.IdleTimeoutInMilliseconds = itElement.GetInt32();
+                            if (turnDetectionElement.TryGetProperty("prefix_padding_ms", out var ppElement) && ppElement.ValueKind == JsonValueKind.Number)
+                                serverVad.PrefixPaddingInMilliseconds = ppElement.GetInt32();
+                            if (turnDetectionElement.TryGetProperty("silence_duration_ms", out var sdElement) && sdElement.ValueKind == JsonValueKind.Number)
+                                serverVad.SilenceDurationInMilliseconds = sdElement.GetInt32();
+                            if (turnDetectionElement.TryGetProperty("threshold", out var thElement) && thElement.ValueKind == JsonValueKind.Number)
+                                serverVad.Threshold = thElement.GetDouble();
+                            options.VoiceActivityDetection = serverVad;
+                        }
+                        else if (vadType == "semantic_vad")
+                        {
+                            var semanticVad = new SemanticVoiceActivityDetection();
+                            if (turnDetectionElement.TryGetProperty("create_response", out var crElement))
+                                semanticVad.CreateResponse = crElement.GetBoolean();
+                            if (turnDetectionElement.TryGetProperty("interrupt_response", out var irElement))
+                                semanticVad.InterruptResponse = irElement.GetBoolean();
+                            if (turnDetectionElement.TryGetProperty("eagerness", out var eagernessElement) &&
+                                eagernessElement.GetString() is string eagerness)
+                                semanticVad.Eagerness = eagerness;
+                            options.VoiceActivityDetection = semanticVad;
+                        }
+                    }
+                }
+
+                // Output audio
+                if (audioElement.TryGetProperty("output", out var outputElement) &&
+                    outputElement.ValueKind == JsonValueKind.Object)
+                {
+                    // Output audio format
+                    if (outputElement.TryGetProperty("format", out var outputFormatElement))
+                        options.OutputAudioFormat = ParseAudioFormat(outputFormatElement);
+
+                    // Voice speed
+                    if (outputElement.TryGetProperty("speed", out var speedElement) && speedElement.ValueKind == JsonValueKind.Number)
+                        options.VoiceSpeed = speedElement.GetDouble();
+
+                    // Voice
+                    if (outputElement.TryGetProperty("voice", out var voiceElement))
+                    {
+                        if (voiceElement.ValueKind == JsonValueKind.String)
+                            options.Voice = voiceElement.GetString();
+                        else if (voiceElement.ValueKind == JsonValueKind.Object &&
+                                 voiceElement.TryGetProperty("id", out var voiceIdElement))
+                            options.Voice = voiceIdElement.GetString();
+                    }
+                }
+            }
+
+            return options;
+        }
 
         private static RealtimeServerErrorMessage? CreateErrorMessage(JsonElement root)
         {
@@ -1147,17 +1407,8 @@ namespace RealtimePlayGround
                 responseAudioElement.TryGetProperty("output", out var outputElement) &&
                 outputElement.ValueKind == JsonValueKind.Object)
             {
-                if (outputElement.TryGetProperty("format", out var formatElement) &&
-                    formatElement.TryGetProperty("type", out var formatTypeElement))
-                {
-                    string? formatType = formatTypeElement.GetString();
-                    msg.OutputAudioOptions = formatType switch
-                    {
-                        "audio/pcma" or "audio/pcmu" => new RealtimeAudioFormat(formatType, 0),
-                        "audio/pcm" => new RealtimeAudioFormat("audio/pcm", 24000),
-                        _ => null
-                    };
-                }
+                if (outputElement.TryGetProperty("format", out var formatElement))
+                    msg.OutputAudioOptions = ParseAudioFormat(formatElement);
 
                 if (outputElement.TryGetProperty("voice", out var voiceElement))
                     msg.OutputVoice = voiceElement.GetString();
@@ -1170,13 +1421,7 @@ namespace RealtimePlayGround
                 msg.ResponseId = idElement.GetString();
 
             if (responseElement.TryGetProperty("max_output_tokens", out var maxOutputTokensElement))
-            {
-                msg.MaxOutputTokens = maxOutputTokensElement.ValueKind == JsonValueKind.Number
-                    ? maxOutputTokensElement.GetInt32()
-                    : maxOutputTokensElement.ValueKind == JsonValueKind.String && maxOutputTokensElement.GetString() == "inf"
-                        ? int.MaxValue
-                        : null;
-            }
+                msg.MaxOutputTokens = ParseMaxOutputTokens(maxOutputTokensElement);
 
             if (responseElement.TryGetProperty("metadata", out var metadataElement) &&
                 metadataElement.ValueKind == JsonValueKind.Object)
@@ -1184,23 +1429,15 @@ namespace RealtimePlayGround
                 var metadataDict = new AdditionalPropertiesDictionary();
                 foreach (var property in metadataElement.EnumerateObject())
                 {
-                    metadataDict[property.Name] = property.Value.GetString();
+                    metadataDict[property.Name] = property.Value.ValueKind == JsonValueKind.String
+                        ? property.Value.GetString()
+                        : JsonSerializer.Deserialize<object?>(property.Value.GetRawText());
                 }
                 msg.Metadata = metadataDict;
             }
 
-            if (responseElement.TryGetProperty("output_modalities", out var outputModalitiesElement) &&
-                outputModalitiesElement.ValueKind == JsonValueKind.Array)
-            {
-                var modalities = new List<string>();
-                foreach (var modalityItem in outputModalitiesElement.EnumerateArray())
-                {
-                    if (modalityItem.GetString() is string m && !string.IsNullOrEmpty(m))
-                        modalities.Add(m);
-                }
-                if (modalities.Count > 0)
-                    msg.OutputModalities = modalities;
-            }
+            if (responseElement.TryGetProperty("output_modalities", out var outputModalitiesElement))
+                msg.OutputModalities = ParseOutputModalities(outputModalitiesElement);
 
             if (responseElement.TryGetProperty("status", out var statusElement))
                 msg.Status = statusElement.GetString();
@@ -1242,6 +1479,6 @@ namespace RealtimePlayGround
     public class ServerEventArgs : EventArgs
     {
         public string EventType { get; set; } = string.Empty;
-        public JsonDocument? Data { get; set; }
+        public JsonElement Data { get; set; }
     }
 }
