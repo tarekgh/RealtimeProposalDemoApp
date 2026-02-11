@@ -820,7 +820,7 @@ namespace RealtimePlayGround
                     return;
                 }
 
-                _realtimeClient = new OpenAIRealtimeClient(apiKey);
+                _realtimeClient = new OpenAIRealtimeClient(apiKey, "gpt-realtime");
 
                 statusLabel.Text = "Connecting to OpenAI...";
                 var session = await _realtimeClient.CreateSessionAsync();
