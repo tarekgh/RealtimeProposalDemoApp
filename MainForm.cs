@@ -14,7 +14,6 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Threading;
-using System.Threading.Channels;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 
@@ -39,7 +38,7 @@ namespace RealtimePlayGround
         private IRealtimeSession? _realtimeSession;
         private bool _isCallActive = false;
         private BufferedWaveProvider? _audioProvider;
-        private Channel<RealtimeClientMessage>? _clientMessageChannel;
+        // Client messages are sent directly via _realtimeSession.SendClientMessageAsync
         private CancellationTokenSource? _streamingCancellationTokenSource;
         private ActivityListener? _activityListener;
         private MeterListener? _meterListener;
@@ -642,14 +641,15 @@ namespace RealtimePlayGround
 
                 double audioDurationMs = (resampledAudio.Length / 2.0) / 24000.0 * 1000.0;
 
-                if (_clientMessageChannel != null)
+                if (_realtimeSession != null)
                 {
-                    await _clientMessageChannel.Writer.WriteAsync(new RealtimeClientInputAudioBufferAppendMessage(
+                    var ct = _streamingCancellationTokenSource?.Token ?? default;
+                    await _realtimeSession.SendClientMessageAsync(new RealtimeClientInputAudioBufferAppendMessage(
                         audioContent: new DataContent($"data:audio/pcm;base64,{Convert.ToBase64String(resampledAudio)}")
-                    ));
+                    ), ct);
 
-                    await _clientMessageChannel.Writer.WriteAsync(new RealtimeClientInputAudioBufferCommitMessage());
-                    await _clientMessageChannel.Writer.WriteAsync(new RealtimeClientResponseCreateMessage());
+                    await _realtimeSession.SendClientMessageAsync(new RealtimeClientInputAudioBufferCommitMessage(), ct);
+                    await _realtimeSession.SendClientMessageAsync(new RealtimeClientResponseCreateMessage(), ct);
 
                     statusLabel.Text = $"Sent {audioDurationMs:F0}ms of audio.";
                 }
@@ -889,7 +889,7 @@ namespace RealtimePlayGround
                     Instructions = "You are a funny chat bot.",
                     Voice = selectedVoice,
                     VoiceSpeed = speedValue,
-                    TranscriptionOptions = new TranscriptionOptions("en", "whisper-1"),
+                    TranscriptionOptions = new TranscriptionOptions { ModelId = "whisper-1", SpeechLanguage = "en" },
                     VoiceActivityDetection = new VoiceActivityDetection
                     {
                         CreateResponse = true,
@@ -910,7 +910,6 @@ namespace RealtimePlayGround
 
             try
             {
-                _clientMessageChannel = Channel.CreateUnbounded<RealtimeClientMessage>();
                 _streamingCancellationTokenSource = new CancellationTokenSource();
 
                 _ = Task.Run(async () =>
@@ -918,7 +917,6 @@ namespace RealtimePlayGround
                     try
                     {
                         await foreach (var serverMessage in _realtimeSession.GetStreamingResponseAsync(
-                            _clientMessageChannel.Reader.ReadAllAsync(_streamingCancellationTokenSource.Token),
                             _streamingCancellationTokenSource.Token))
                         {
                             ProcessServerMessage(serverMessage);
@@ -946,16 +944,16 @@ namespace RealtimePlayGround
                 try
                 {
                     string eventType = serverMessage.Type.ToString();
-                    richTextBoxEvents?.AppendText($"{eventType} .... {serverMessage.EventId}\n");
+                    richTextBoxEvents?.AppendText($"{eventType} .... {serverMessage.MessageId}\n");
                     richTextBoxEvents?.ScrollToCaret();
                     statusLabel.Text = $"[{eventType}]";
 
                     switch (serverMessage)
                     {
                         case RealtimeServerOutputTextAudioMessage audioMessage:
-                            if (audioMessage.Type == RealtimeServerMessageType.OutputAudioDelta && audioMessage.Text != null)
+                            if (audioMessage.Type == RealtimeServerMessageType.OutputAudioDelta && audioMessage.Audio != null)
                             {
-                                PlayAudioChunk(audioMessage.Text);
+                                PlayAudioChunk(audioMessage.Audio);
                             }
                             else if (audioMessage.Type == RealtimeServerMessageType.OutputAudioTranscriptionDelta && audioMessage.Text != null)
                             {
@@ -1037,10 +1035,6 @@ namespace RealtimePlayGround
                 _streamingCancellationTokenSource?.Cancel();
                 _streamingCancellationTokenSource?.Dispose();
                 _streamingCancellationTokenSource = null;
-
-                // Complete the client message channel
-                _clientMessageChannel?.Writer.Complete();
-                _clientMessageChannel = null;
 
                 if (_realtimeSession != null)
                 {
@@ -1175,7 +1169,7 @@ namespace RealtimePlayGround
                         Instructions = "You are a funny chat bot.",
                         Voice = selectedVoice,
                         VoiceSpeed = speedValue,
-                        TranscriptionOptions = new TranscriptionOptions("en", "whisper-1"),
+                        TranscriptionOptions = new TranscriptionOptions { ModelId = "whisper-1", SpeechLanguage = "en" },
                         VoiceActivityDetection = new VoiceActivityDetection
                         {
                             CreateResponse = true,
@@ -1216,15 +1210,16 @@ namespace RealtimePlayGround
                 {
                     WriteUserTextToRichTextBox($"You: {text}\n");
 
-                    if (_clientMessageChannel != null)
+                    if (_realtimeSession != null)
                     {
                         var contentItem = new RealtimeContentItem(
                             [new TextContent(text)],
                             id: null,
                             role: ChatRole.User
                         );
-                        await _clientMessageChannel.Writer.WriteAsync(new RealtimeClientConversationItemCreateMessage(item: contentItem));
-                        await _clientMessageChannel.Writer.WriteAsync(new RealtimeClientResponseCreateMessage());
+                        var ct = _streamingCancellationTokenSource?.Token ?? default;
+                        await _realtimeSession.SendClientMessageAsync(new RealtimeClientConversationItemCreateMessage(item: contentItem), ct);
+                        await _realtimeSession.SendClientMessageAsync(new RealtimeClientResponseCreateMessage(), ct);
                         statusLabel.Text = "Text sent. Waiting for response...";
                     }
                 }
@@ -1291,15 +1286,16 @@ namespace RealtimePlayGround
                         mimeType = "image/png";
                 }
 
-                if (_clientMessageChannel != null)
+                if (_realtimeSession != null)
                 {
                     var contentItem = new RealtimeContentItem(
                         [new DataContent($"data:{mimeType};base64,{base64Image}")],
                         id: null,
                         role: ChatRole.User
                     );
-                    await _clientMessageChannel.Writer.WriteAsync(new RealtimeClientConversationItemCreateMessage(item: contentItem));
-                    await _clientMessageChannel.Writer.WriteAsync(new RealtimeClientResponseCreateMessage());
+                    var ct = _streamingCancellationTokenSource?.Token ?? default;
+                    await _realtimeSession.SendClientMessageAsync(new RealtimeClientConversationItemCreateMessage(item: contentItem), ct);
+                    await _realtimeSession.SendClientMessageAsync(new RealtimeClientResponseCreateMessage(), ct);
                 }
 
                 using var ms = new MemoryStream(imageBytes);
