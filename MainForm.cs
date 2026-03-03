@@ -823,10 +823,14 @@ namespace RealtimePlayGround
                 _realtimeClient = new OpenAIRealtimeClient(apiKey, "gpt-realtime");
 
                 statusLabel.Text = "Connecting to OpenAI...";
-                var session = await _realtimeClient.CreateSessionAsync();
-                if (session == null)
+                IRealtimeSession session;
+                try
                 {
-                    WriteErrorToRichTextBox("Failed to connect to OpenAI.");
+                    session = await _realtimeClient.CreateSessionAsync();
+                }
+                catch (Exception ex)
+                {
+                    WriteErrorToRichTextBox($"Failed to connect to OpenAI: {ex.Message}");
                     statusLabel.Text = "Connection failed.";
                     return;
                 }
