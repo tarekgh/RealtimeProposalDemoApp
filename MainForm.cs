@@ -3,6 +3,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using NAudio.Wave;
+using Sdk = OpenAI.Realtime;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -11,8 +12,7 @@ using System.IO;
 using System.Linq;
 using System.Net.Http;
 using System.Text;
-using System.Text.Json;
-using System.Text.Json.Nodes;
+
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
@@ -919,6 +919,7 @@ namespace RealtimePlayGround
                         await foreach (var serverMessage in _realtimeSession.GetStreamingResponseAsync(
                             _streamingCancellationTokenSource.Token))
                         {
+                            Invoke(() => WriteErrorToRichTextBox($"Last Message: {serverMessage.Type}"));
                             ProcessServerMessage(serverMessage);
                         }
                     }
@@ -1010,12 +1011,10 @@ namespace RealtimePlayGround
                             break;
 
                         default:
-                            if (serverMessage.RawRepresentation is not null)
+                            if (serverMessage.RawRepresentation is Sdk.RealtimeServerUpdate sdkUpdate
+                                && sdkUpdate.Patch.TryGetValue("$.type"u8, out string? sdkEventType))
                             {
-                                if (serverMessage.RawRepresentation is JsonElement rawElement && rawElement.TryGetProperty("type", out var typeProperty))
-                                {
-                                    richTextBoxEvents?.AppendText($"{serverMessage.Type} ... {typeProperty} \n");
-                                }
+                                richTextBoxEvents?.AppendText($"{serverMessage.Type} ... {sdkEventType} \n");
                             }
                             break;
                     }

@@ -4,7 +4,7 @@
     <TargetFramework>net10.0-windows</TargetFramework>
     <UseWindowsForms>true</UseWindowsForms>
     <Nullable>enable</Nullable>
-    <NoWarn>MEAI001</NoWarn>
+    <NoWarn>MEAI001;OPENAI002;SCME0001</NoWarn>
     <UserSecretsId>e06bace5-f5b8-418a-9f8d-6737dfc66663</UserSecretsId>
 
 	<PrivateExtensionAIPackageVersion>10.4.0-dev</PrivateExtensionAIPackageVersion>
