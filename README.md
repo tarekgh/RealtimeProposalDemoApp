@@ -1,6 +1,6 @@
 # RealtimePlayGround
 
-A C# Windows Forms demo application built to test and showcase the **Microsoft.Extensions.AI.Abstractions** realtime API surface. It connects to OpenAI's Realtime API through the `Microsoft.Extensions.AI` abstraction layer, enabling voice-based conversations with an AI assistant — complete with tool calling, telemetry, and logging — all driven by the new `IRealtimeClient` / `IRealtimeSession` interfaces.
+A C# Windows Forms demo application built to test and showcase the **Microsoft.Extensions.AI.Abstractions** realtime API surface. It connects to OpenAI's Realtime API through the `Microsoft.Extensions.AI` abstraction layer, enabling voice-based conversations with an AI assistant — complete with tool calling, telemetry, and logging — all driven by the new `IRealtimeClient` / `IRealtimeClientSession` interfaces.
 
 ## Purpose
 
@@ -8,7 +8,7 @@ This project serves as a playground and integration test-bed for the **Microsoft
 
 | Abstraction concept | How it is used here |
 |---|---|
-| `IRealtimeClient` / `IRealtimeSession` | Create and manage a realtime session with OpenAI |
+| `IRealtimeClient` / `IRealtimeClientSession` | Create and manage a realtime session with OpenAI |
 | `RealtimeSessionBuilder` middleware pipeline | Wire up function invocation, OpenTelemetry, and logging middleware |
 | `RealtimeSessionOptions` | Configure voice, speed, modalities, transcription, and VAD settings |
 | `RealtimeClientMessage` / `RealtimeServerMessage` | Send audio buffers and text to the model; receive audio, transcripts, and tool-call requests |
@@ -76,7 +76,7 @@ dotnet run --project RealtimePlayGround
 
 | Package | Purpose |
 |---|---|
-| `Microsoft.Extensions.AI.Abstractions` | Core AI abstractions (`IRealtimeClient`, `IRealtimeSession`, etc.) |
+| `Microsoft.Extensions.AI.Abstractions` | Core AI abstractions (`IRealtimeClient`, `IRealtimeClientSession`, etc.) |
 | `Microsoft.Extensions.AI` | Middleware pipeline (`RealtimeSessionBuilder`, function invocation, OpenTelemetry, logging) |
 | `Microsoft.Extensions.AI.OpenAI` | OpenAI provider implementation (`OpenAIRealtimeClient`) |
 | `NAudio` | Audio capture and playback |
