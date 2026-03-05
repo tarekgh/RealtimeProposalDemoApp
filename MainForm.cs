@@ -989,7 +989,7 @@ namespace RealtimePlayGround
                             break;
 
                         case RealtimeServerResponseOutputItemMessage responseMessage:
-                            if (responseMessage.Item is RealtimeContentItem contentItem)
+                            if (responseMessage.Item is RealtimeConversationItem contentItem)
                             {
                                 foreach (var content in contentItem.Contents)
                                 {
@@ -1214,7 +1214,7 @@ namespace RealtimePlayGround
 
                     if (_realtimeSession != null)
                     {
-                        var contentItem = new RealtimeContentItem(
+                        var contentItem = new RealtimeConversationItem(
                             [new TextContent(text)],
                             id: null,
                             role: ChatRole.User
@@ -1290,7 +1290,7 @@ namespace RealtimePlayGround
 
                 if (_realtimeSession != null)
                 {
-                    var contentItem = new RealtimeContentItem(
+                    var contentItem = new RealtimeConversationItem(
                         [new DataContent($"data:{mimeType};base64,{base64Image}")],
                         id: null,
                         role: ChatRole.User
