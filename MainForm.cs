@@ -892,13 +892,24 @@ namespace RealtimePlayGround
                     OutputModalities = ["audio"],
                     Instructions = "You are a funny chat bot.",
                     Voice = selectedVoice,
-                    VoiceSpeed = speedValue,
                     TranscriptionOptions = new TranscriptionOptions { ModelId = "whisper-1", SpeechLanguage = "en" },
                     VoiceActivityDetection = new VoiceActivityDetection
                     {
                         CreateResponse = true,
                     },
-                    Tools = [getWeatherFunction]
+                    Tools = [getWeatherFunction],
+                    RawRepresentationFactory = _ =>
+                    {
+                        var sdkOptions = new OpenAI.Realtime.RealtimeConversationSessionOptions();
+                        sdkOptions.AudioOptions = new OpenAI.Realtime.RealtimeConversationSessionAudioOptions
+                        {
+                            OutputAudioOptions = new OpenAI.Realtime.RealtimeConversationSessionOutputAudioOptions
+                            {
+                                Speed = (float)speedValue,
+                            },
+                        };
+                        return sdkOptions;
+                    },
                 });
             }
             catch (Exception ex)
@@ -1170,11 +1181,22 @@ namespace RealtimePlayGround
                         OutputModalities = ["audio"],
                         Instructions = "You are a funny chat bot.",
                         Voice = selectedVoice,
-                        VoiceSpeed = speedValue,
                         TranscriptionOptions = new TranscriptionOptions { ModelId = "whisper-1", SpeechLanguage = "en" },
                         VoiceActivityDetection = new VoiceActivityDetection
                         {
                             CreateResponse = true,
+                        },
+                        RawRepresentationFactory = _ =>
+                        {
+                            var sdkOptions = new OpenAI.Realtime.RealtimeConversationSessionOptions();
+                            sdkOptions.AudioOptions = new OpenAI.Realtime.RealtimeConversationSessionAudioOptions
+                            {
+                                OutputAudioOptions = new OpenAI.Realtime.RealtimeConversationSessionOutputAudioOptions
+                                {
+                                    Speed = (float)speedValue,
+                                },
+                            };
+                            return sdkOptions;
                         },
                     });
 
