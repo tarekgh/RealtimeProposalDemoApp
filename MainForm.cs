@@ -887,7 +887,7 @@ namespace RealtimePlayGround
 
                 await StartStreamingAsync();
 
-                await _realtimeSession.UpdateAsync(new RealtimeSessionOptions
+                await _realtimeSession.SendAsync(new RealtimeClientSessionUpdateMessage(new RealtimeSessionOptions
                 {
                     OutputModalities = ["audio"],
                     Instructions = "You are a funny chat bot.",
@@ -910,7 +910,7 @@ namespace RealtimePlayGround
                         };
                         return sdkOptions;
                     },
-                });
+                }));
             }
             catch (Exception ex)
             {
@@ -1176,7 +1176,7 @@ namespace RealtimePlayGround
                     double speedValue = GetSpeedValue();
                     string selectedVoice = cmbVoice.SelectedItem?.ToString() ?? "alloy";
 
-                    await _realtimeSession.UpdateAsync(new RealtimeSessionOptions
+                    await _realtimeSession.SendAsync(new RealtimeClientSessionUpdateMessage(new RealtimeSessionOptions
                     {
                         OutputModalities = ["audio"],
                         Instructions = "You are a funny chat bot.",
@@ -1198,7 +1198,7 @@ namespace RealtimePlayGround
                             };
                             return sdkOptions;
                         },
-                    });
+                    }));
 
                     statusLabel.Text = $"Speed updated to {speedValue}x";
                 }
