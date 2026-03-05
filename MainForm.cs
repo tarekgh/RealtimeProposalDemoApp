@@ -649,7 +649,7 @@ namespace RealtimePlayGround
                     ), ct);
 
                     await _realtimeSession.SendAsync(new RealtimeClientInputAudioBufferCommitMessage(), ct);
-                    await _realtimeSession.SendAsync(new RealtimeClientResponseCreateMessage(), ct);
+                    await _realtimeSession.SendAsync(new RealtimeClientCreateResponseMessage(), ct);
 
                     statusLabel.Text = $"Sent {audioDurationMs:F0}ms of audio.";
                 }
@@ -922,7 +922,7 @@ namespace RealtimePlayGround
                     {
                         await foreach (var serverMessage in _realtimeSession.GetStreamingResponseAsync(_streamingCancellationTokenSource.Token))
                         {
-                            Invoke(() => WriteErrorToRichTextBox($"Last Message: {serverMessage.Type}"));
+                            // Invoke(() => WriteErrorToRichTextBox($"Last Message: {serverMessage.Type}"));
                             ProcessServerMessage(serverMessage);
                         }
                     }
@@ -1040,7 +1040,7 @@ namespace RealtimePlayGround
 
                 if (_realtimeSession != null)
                 {
-                    _realtimeSession.Dispose();
+                    await _realtimeSession.DisposeAsync();
                     _realtimeSession = null;
                 }
 
@@ -1220,8 +1220,8 @@ namespace RealtimePlayGround
                             role: ChatRole.User
                         );
                         var ct = _streamingCancellationTokenSource?.Token ?? default;
-                        await _realtimeSession.SendAsync(new RealtimeClientConversationItemCreateMessage(item: contentItem), ct);
-                        await _realtimeSession.SendAsync(new RealtimeClientResponseCreateMessage(), ct);
+                        await _realtimeSession.SendAsync(new RealtimeClientCreateConversationItemMessage(item: contentItem), ct);
+                        await _realtimeSession.SendAsync(new RealtimeClientCreateResponseMessage(), ct);
                         statusLabel.Text = "Text sent. Waiting for response...";
                     }
                 }
@@ -1296,8 +1296,8 @@ namespace RealtimePlayGround
                         role: ChatRole.User
                     );
                     var ct = _streamingCancellationTokenSource?.Token ?? default;
-                    await _realtimeSession.SendAsync(new RealtimeClientConversationItemCreateMessage(item: contentItem), ct);
-                    await _realtimeSession.SendAsync(new RealtimeClientResponseCreateMessage(), ct);
+                    await _realtimeSession.SendAsync(new RealtimeClientCreateConversationItemMessage(item: contentItem), ct);
+                    await _realtimeSession.SendAsync(new RealtimeClientCreateResponseMessage(), ct);
                 }
 
                 using var ms = new MemoryStream(imageBytes);
