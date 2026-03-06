@@ -9,7 +9,7 @@ This project serves as a playground and integration test-bed for the **Microsoft
 | Abstraction concept | How it is used here |
 |---|---|
 | `IRealtimeClient` / `IRealtimeClientSession` | Create and manage a realtime session with OpenAI |
-| `RealtimeSessionBuilder` middleware pipeline | Wire up function invocation, OpenTelemetry, and logging middleware |
+| `RealtimeClientSessionBuilder` middleware pipeline | Wire up function invocation, OpenTelemetry, and logging middleware |
 | `RealtimeSessionOptions` | Configure voice, speed, modalities, transcription, and VAD settings |
 | `RealtimeClientMessage` / `RealtimeServerMessage` | Send audio buffers and text to the model; receive audio, transcripts, and tool-call requests |
 | `AIFunction` / function invocation middleware | Register and auto-invoke tools (e.g. `GetWeather`) during a realtime conversation |
@@ -77,7 +77,7 @@ dotnet run --project RealtimePlayGround
 | Package | Purpose |
 |---|---|
 | `Microsoft.Extensions.AI.Abstractions` | Core AI abstractions (`IRealtimeClient`, `IRealtimeClientSession`, etc.) |
-| `Microsoft.Extensions.AI` | Middleware pipeline (`RealtimeSessionBuilder`, function invocation, OpenTelemetry, logging) |
+| `Microsoft.Extensions.AI` | Middleware pipeline (`RealtimeClientSessionBuilder`, function invocation, OpenTelemetry, logging) |
 | `Microsoft.Extensions.AI.OpenAI` | OpenAI provider implementation (`OpenAIRealtimeClient`) |
 | `NAudio` | Audio capture and playback |
 | `Microsoft.Extensions.Logging` | Logging infrastructure |
@@ -87,4 +87,4 @@ dotnet run --project RealtimePlayGround
 
 - **Audio format**: 44.1 kHz (or best available), 16-bit, Mono
 - **Streaming model**: Uses `System.Threading.Channels` to asynchronously pipe `RealtimeClientMessage` objects to the session and receive `RealtimeServerMessage` responses
-- **Middleware pipeline**: `RealtimeSessionBuilder` → `UseFunctionInvocation` → `UseOpenTelemetry` → `UseLogging` → underlying session
+- **Middleware pipeline**: `RealtimeClientSessionBuilder` → `UseFunctionInvocation` → `UseOpenTelemetry` → `UseLogging` → underlying session

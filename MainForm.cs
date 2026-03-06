@@ -855,7 +855,7 @@ namespace RealtimePlayGround
                     })
                     .BuildServiceProvider();
 
-                var builder = new RealtimeSessionBuilder(session!)
+                var builder = new RealtimeClientSessionBuilder(session!)
                     .UseFunctionInvocation(configure: functionSession =>
                     {
                         functionSession.AdditionalTools = [getWeatherFunction];
@@ -893,16 +893,19 @@ namespace RealtimePlayGround
                     Instructions = "You are a funny chat bot.",
                     Voice = selectedVoice,
                     TranscriptionOptions = new TranscriptionOptions { ModelId = "whisper-1", SpeechLanguage = "en" },
-                    VoiceActivityDetection = new VoiceActivityDetection
-                    {
-                        CreateResponse = true,
-                    },
                     Tools = [getWeatherFunction],
                     RawRepresentationFactory = _ =>
                     {
                         var sdkOptions = new OpenAI.Realtime.RealtimeConversationSessionOptions();
                         sdkOptions.AudioOptions = new OpenAI.Realtime.RealtimeConversationSessionAudioOptions
                         {
+                            InputAudioOptions = new OpenAI.Realtime.RealtimeConversationSessionInputAudioOptions
+                            {
+                                TurnDetection = new OpenAI.Realtime.RealtimeServerVadTurnDetection
+                                {
+                                    CreateResponseEnabled = true,
+                                },
+                            },
                             OutputAudioOptions = new OpenAI.Realtime.RealtimeConversationSessionOutputAudioOptions
                             {
                                 Speed = (float)speedValue,
@@ -1182,15 +1185,18 @@ namespace RealtimePlayGround
                         Instructions = "You are a funny chat bot.",
                         Voice = selectedVoice,
                         TranscriptionOptions = new TranscriptionOptions { ModelId = "whisper-1", SpeechLanguage = "en" },
-                        VoiceActivityDetection = new VoiceActivityDetection
-                        {
-                            CreateResponse = true,
-                        },
                         RawRepresentationFactory = _ =>
                         {
                             var sdkOptions = new OpenAI.Realtime.RealtimeConversationSessionOptions();
                             sdkOptions.AudioOptions = new OpenAI.Realtime.RealtimeConversationSessionAudioOptions
                             {
+                                InputAudioOptions = new OpenAI.Realtime.RealtimeConversationSessionInputAudioOptions
+                                {
+                                    TurnDetection = new OpenAI.Realtime.RealtimeServerVadTurnDetection
+                                    {
+                                        CreateResponseEnabled = true,
+                                    },
+                                },
                                 OutputAudioOptions = new OpenAI.Realtime.RealtimeConversationSessionOutputAudioOptions
                                 {
                                     Speed = (float)speedValue,
