@@ -822,19 +822,6 @@ namespace RealtimePlayGround
 
                 _realtimeClient = new OpenAIRealtimeClient(apiKey, "gpt-realtime");
 
-                statusLabel.Text = "Connecting to OpenAI...";
-                IRealtimeClientSession session;
-                try
-                {
-                    session = await _realtimeClient.CreateSessionAsync();
-                }
-                catch (Exception ex)
-                {
-                    WriteErrorToRichTextBox($"Failed to connect to OpenAI: {ex.Message}");
-                    statusLabel.Text = "Connection failed.";
-                    return;
-                }
-
                 AIFunction getWeatherFunction = AIFunctionFactory.Create(
                     (string location) =>
                         location switch
@@ -855,7 +842,7 @@ namespace RealtimePlayGround
                     })
                     .BuildServiceProvider();
 
-                var builder = new RealtimeClientSessionBuilder(session!)
+                var builder = new RealtimeClientBuilder(_realtimeClient)
                     .UseFunctionInvocation(configure: functionSession =>
                     {
                         functionSession.AdditionalTools = [getWeatherFunction];
@@ -869,7 +856,19 @@ namespace RealtimePlayGround
                     })
                     .UseLogging();
 
-                _realtimeSession = builder.Build(services);
+                var wrappedClient = builder.Build(services);
+
+                statusLabel.Text = "Connecting to OpenAI...";
+                try
+                {
+                    _realtimeSession = await wrappedClient.CreateSessionAsync();
+                }
+                catch (Exception ex)
+                {
+                    WriteErrorToRichTextBox($"Failed to connect to OpenAI: {ex.Message}");
+                    statusLabel.Text = "Connection failed.";
+                    return;
+                }
 
                 _isCallActive = true;
                 if (_hangUpIcon != null)
