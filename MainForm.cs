@@ -839,7 +839,7 @@ namespace RealtimePlayGround
                         return;
                     }
 
-                    _realtimeClient = new OpenAIRealtimeClient(openAiKey, "gpt-realtime");
+                    _realtimeClient = new OpenAIRealtimeClient(openAiKey, "gpt-realtime-1.5");
                 }
 
                 string providerName = isGemini ? "Google Gemini" : "OpenAI";
