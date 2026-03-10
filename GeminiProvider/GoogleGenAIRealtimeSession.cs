@@ -3,7 +3,6 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Net.WebSockets;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Threading;
@@ -65,42 +64,35 @@ public sealed class GoogleGenAIRealtimeSession : IRealtimeClientSession
 
         cancellationToken.ThrowIfCancellationRequested();
 
-        try
+        switch (message)
         {
-            switch (message)
-            {
-                case InputAudioBufferAppendRealtimeClientMessage audioAppend:
-                    await HandleAudioAppendAsync(audioAppend, cancellationToken).ConfigureAwait(false);
-                    break;
+            case InputAudioBufferAppendRealtimeClientMessage audioAppend:
+                await HandleAudioAppendAsync(audioAppend, cancellationToken).ConfigureAwait(false);
+                break;
 
-                case InputAudioBufferCommitRealtimeClientMessage:
-                    await HandleAudioCommitAsync(cancellationToken).ConfigureAwait(false);
-                    break;
+            case InputAudioBufferCommitRealtimeClientMessage:
+                await HandleAudioCommitAsync(cancellationToken).ConfigureAwait(false);
+                break;
 
-                case CreateConversationItemRealtimeClientMessage itemCreate:
-                    await HandleConversationItemCreateAsync(itemCreate, cancellationToken).ConfigureAwait(false);
-                    break;
+            case CreateConversationItemRealtimeClientMessage itemCreate:
+                await HandleConversationItemCreateAsync(itemCreate, cancellationToken).ConfigureAwait(false);
+                break;
 
-                case SessionUpdateRealtimeClientMessage sessionUpdate:
-                    Options = sessionUpdate.Options ?? throw new ArgumentNullException(nameof(sessionUpdate.Options));
-                    break;
+            case SessionUpdateRealtimeClientMessage sessionUpdate:
+                Options = sessionUpdate.Options ?? throw new ArgumentNullException(nameof(sessionUpdate.Options));
+                break;
 
-                case CreateResponseRealtimeClientMessage:
-                    if (!_lastInputWasRealtime)
-                    {
-                        await _asyncSession.SendClientContentAsync(
-                            new LiveSendClientContentParameters { TurnComplete = true },
-                            cancellationToken).ConfigureAwait(false);
-                    }
-                    break;
+            case CreateResponseRealtimeClientMessage:
+                if (!_lastInputWasRealtime)
+                {
+                    await _asyncSession.SendClientContentAsync(
+                        new LiveSendClientContentParameters { TurnComplete = true },
+                        cancellationToken).ConfigureAwait(false);
+                }
+                break;
 
-                default:
-                    break;
-            }
-        }
-        catch (Exception ex) when (ex is OperationCanceledException or ObjectDisposedException or WebSocketException)
-        {
-            // Expected during session teardown.
+            default:
+                break;
         }
     }
 
@@ -111,14 +103,7 @@ public sealed class GoogleGenAIRealtimeSession : IRealtimeClientSession
         while (!cancellationToken.IsCancellationRequested)
         {
             LiveServerMessage? serverMessage;
-            try
-            {
-                serverMessage = await _asyncSession.ReceiveAsync(cancellationToken).ConfigureAwait(false);
-            }
-            catch (Exception ex) when (ex is OperationCanceledException or ObjectDisposedException or WebSocketException)
-            {
-                yield break;
-            }
+            serverMessage = await _asyncSession.ReceiveAsync(cancellationToken).ConfigureAwait(false);
 
             if (serverMessage is null)
             {
