@@ -21,6 +21,8 @@ namespace RealtimePlayGround
         private System.Windows.Forms.ComboBox cmbLogLevel;
         private System.Windows.Forms.Label lblProvider;
         private System.Windows.Forms.ComboBox cmbProvider;
+        private System.Windows.Forms.CheckBox chkVadEnabled;
+        private System.Windows.Forms.CheckBox chkAllowInterruption;
         private System.Windows.Forms.SplitContainer splitContainer2;
 
         protected override void Dispose(bool disposing)
@@ -53,6 +55,8 @@ namespace RealtimePlayGround
             this.cmbLogLevel = new System.Windows.Forms.ComboBox();
             this.lblProvider = new System.Windows.Forms.Label();
             this.cmbProvider = new System.Windows.Forms.ComboBox();
+            this.chkVadEnabled = new System.Windows.Forms.CheckBox();
+            this.chkAllowInterruption = new System.Windows.Forms.CheckBox();
             ((System.ComponentModel.ISupportInitialize)(this.splitContainer1)).BeginInit();
             ((System.ComponentModel.ISupportInitialize)(this.splitContainer2)).BeginInit();
             ((System.ComponentModel.ISupportInitialize)(this.trackSpeed)).BeginInit();
@@ -129,7 +133,7 @@ namespace RealtimePlayGround
             "cedar"});
             this.cmbVoice.Location = new System.Drawing.Point(12, 152);
             this.cmbVoice.Name = "cmbVoice";
-            this.cmbVoice.Size = new System.Drawing.Size(130, 25);
+            this.cmbVoice.Size = new System.Drawing.Size(150, 25);
             this.cmbVoice.TabIndex = 10;
             this.cmbVoice.SelectedIndex = 0;
             //
@@ -150,7 +154,7 @@ namespace RealtimePlayGround
             this.trackSpeed.Maximum = 2;
             this.trackSpeed.Minimum = 0;
             this.trackSpeed.Name = "trackSpeed";
-            this.trackSpeed.Size = new System.Drawing.Size(130, 45);
+            this.trackSpeed.Size = new System.Drawing.Size(150, 45);
             this.trackSpeed.TabIndex = 12;
             this.trackSpeed.Value = 1;
             this.trackSpeed.ValueChanged += new System.EventHandler(this.trackSpeed_ValueChanged);
@@ -175,7 +179,7 @@ namespace RealtimePlayGround
             this.cmbLogLevel.FormattingEnabled = true;
             this.cmbLogLevel.Location = new System.Drawing.Point(12, 282);
             this.cmbLogLevel.Name = "cmbLogLevel";
-            this.cmbLogLevel.Size = new System.Drawing.Size(130, 25);
+            this.cmbLogLevel.Size = new System.Drawing.Size(150, 25);
             this.cmbLogLevel.TabIndex = 14;
             this.cmbLogLevel.Items.AddRange(new object[] 
             {
@@ -210,10 +214,37 @@ namespace RealtimePlayGround
             "Google Gemini"});
             this.cmbProvider.Location = new System.Drawing.Point(12, 342);
             this.cmbProvider.Name = "cmbProvider";
-            this.cmbProvider.Size = new System.Drawing.Size(130, 25);
+            this.cmbProvider.Size = new System.Drawing.Size(150, 25);
             this.cmbProvider.TabIndex = 16;
             this.cmbProvider.SelectedIndex = 0;
             this.cmbProvider.SelectedIndexChanged += new System.EventHandler(this.cmbProvider_SelectedIndexChanged);
+
+            //
+            // chkVadEnabled
+            //
+            this.chkVadEnabled.AutoSize = true;
+            this.chkVadEnabled.Checked = true;
+            this.chkVadEnabled.CheckState = System.Windows.Forms.CheckState.Checked;
+            this.chkVadEnabled.Font = new System.Drawing.Font("Segoe UI", 10F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point);
+            this.chkVadEnabled.Location = new System.Drawing.Point(12, 380);
+            this.chkVadEnabled.Name = "chkVadEnabled";
+            this.chkVadEnabled.Size = new System.Drawing.Size(130, 23);
+            this.chkVadEnabled.TabIndex = 17;
+            this.chkVadEnabled.Text = "Enable VAD";
+            this.chkVadEnabled.UseVisualStyleBackColor = true;
+            //
+            // chkAllowInterruption
+            //
+            this.chkAllowInterruption.AutoSize = true;
+            this.chkAllowInterruption.Checked = true;
+            this.chkAllowInterruption.CheckState = System.Windows.Forms.CheckState.Checked;
+            this.chkAllowInterruption.Font = new System.Drawing.Font("Segoe UI", 10F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point);
+            this.chkAllowInterruption.Location = new System.Drawing.Point(12, 406);
+            this.chkAllowInterruption.Name = "chkAllowInterruption";
+            this.chkAllowInterruption.Size = new System.Drawing.Size(130, 23);
+            this.chkAllowInterruption.TabIndex = 18;
+            this.chkAllowInterruption.Text = "Allow Interruption";
+            this.chkAllowInterruption.UseVisualStyleBackColor = true;
 
             //
             // statusLabel
@@ -221,9 +252,9 @@ namespace RealtimePlayGround
             this.statusLabel.Anchor = ((System.Windows.Forms.AnchorStyles)((System.Windows.Forms.AnchorStyles.Bottom | System.Windows.Forms.AnchorStyles.Left)));
             this.statusLabel.AutoSize = true;
             this.statusLabel.Font = new System.Drawing.Font("Segoe UI", 10F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point);
-            this.statusLabel.Location = new System.Drawing.Point(12, 380);
+            this.statusLabel.Location = new System.Drawing.Point(12, 436);
             this.statusLabel.Name = "statusLabel";
-            this.statusLabel.Size = new System.Drawing.Size(200, 19);
+            this.statusLabel.Size = new System.Drawing.Size(150, 19);
             this.statusLabel.TabIndex = 2;
             this.statusLabel.Text = "Ready to record.";
             //
@@ -232,9 +263,9 @@ namespace RealtimePlayGround
             this.richTextBox2.Anchor = ((System.Windows.Forms.AnchorStyles)(((System.Windows.Forms.AnchorStyles.Bottom | System.Windows.Forms.AnchorStyles.Left)
             | System.Windows.Forms.AnchorStyles.Right)));
             this.richTextBox2.Enabled = false;
-            this.richTextBox2.Location = new System.Drawing.Point(148, 268);
+            this.richTextBox2.Location = new System.Drawing.Point(175, 350);
             this.richTextBox2.Name = "richTextBox2";
-            this.richTextBox2.Size = new System.Drawing.Size(360, 80);
+            this.richTextBox2.Size = new System.Drawing.Size(367, 80);
             this.richTextBox2.TabIndex = 4;
             this.richTextBox2.Text = "";
             this.richTextBox2.KeyDown += new System.Windows.Forms.KeyEventHandler(this.richTextBox2_KeyDown);
@@ -243,9 +274,9 @@ namespace RealtimePlayGround
             //
             this.btnSend.Anchor = ((System.Windows.Forms.AnchorStyles)((System.Windows.Forms.AnchorStyles.Bottom | System.Windows.Forms.AnchorStyles.Right)));
             this.btnSend.Enabled = false;
-            this.btnSend.Location = new System.Drawing.Point(514, 268);
+            this.btnSend.Location = new System.Drawing.Point(548, 350);
             this.btnSend.Name = "btnSend";
-            this.btnSend.Size = new System.Drawing.Size(74, 80);
+            this.btnSend.Size = new System.Drawing.Size(70, 80);
             this.btnSend.TabIndex = 8;
             this.btnSend.Text = "Send";
             this.btnSend.UseVisualStyleBackColor = true;
@@ -256,7 +287,7 @@ namespace RealtimePlayGround
             this.splitContainer1.Anchor = ((System.Windows.Forms.AnchorStyles)((((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Bottom)
             | System.Windows.Forms.AnchorStyles.Left)
             | System.Windows.Forms.AnchorStyles.Right)));
-            this.splitContainer1.Location = new System.Drawing.Point(148, 12);
+            this.splitContainer1.Location = new System.Drawing.Point(175, 12);
             this.splitContainer1.Name = "splitContainer1";
             //
             // splitContainer1.Panel1
@@ -266,7 +297,7 @@ namespace RealtimePlayGround
             // splitContainer1.Panel2
             //
             this.splitContainer1.Panel2.Controls.Add(this.splitContainer2);
-            this.splitContainer1.Size = new System.Drawing.Size(440, 250);
+            this.splitContainer1.Size = new System.Drawing.Size(443, 332);
             this.splitContainer1.SplitterDistance = 254;
             this.splitContainer1.TabIndex = 7;
             //
@@ -321,7 +352,9 @@ namespace RealtimePlayGround
             //
             this.AutoScaleDimensions = new System.Drawing.SizeF(7F, 15F);
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
-            this.ClientSize = new System.Drawing.Size(600, 410);
+            this.ClientSize = new System.Drawing.Size(630, 460);
+            this.Controls.Add(this.chkAllowInterruption);
+            this.Controls.Add(this.chkVadEnabled);
             this.Controls.Add(this.cmbProvider);
             this.Controls.Add(this.lblProvider);
             this.Controls.Add(this.cmbLogLevel);
@@ -337,7 +370,7 @@ namespace RealtimePlayGround
             this.Controls.Add(this.btnCall);
             this.Controls.Add(this.btnPlay);
             this.Controls.Add(this.btnRecord);
-            this.MinimumSize = new System.Drawing.Size(400, 300);
+            this.MinimumSize = new System.Drawing.Size(450, 350);
             this.Name = "MainForm";
             this.StartPosition = System.Windows.Forms.FormStartPosition.CenterScreen;
             this.Text = "RealtimePlayGround - Audio Recorder";

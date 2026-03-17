@@ -869,7 +869,12 @@ namespace RealtimePlayGround
                         Instructions = "You are a funny chat bot.",
                         Voice = selectedVoice,
                         TranscriptionOptions = new TranscriptionOptions(),
-                        Tools = [getWeatherFunction]
+                        Tools = [getWeatherFunction],
+                        VoiceActivityDetection = new VoiceActivityDetectionOptions
+                        {
+                            Enabled = chkVadEnabled.Checked,
+                            AllowInterruption = chkAllowInterruption.Checked,
+                        },
                     };
                 }
                 else
@@ -882,18 +887,16 @@ namespace RealtimePlayGround
                         Voice = selectedVoice,
                         TranscriptionOptions = new TranscriptionOptions { ModelId = "whisper-1", SpeechLanguage = "en" },
                         Tools = [getWeatherFunction],
+                        VoiceActivityDetection = new VoiceActivityDetectionOptions
+                        {
+                            Enabled = chkVadEnabled.Checked,
+                            AllowInterruption = chkAllowInterruption.Checked,
+                        },
                         RawRepresentationFactory = () =>
                         {
                             var sdkOptions = new OpenAI.Realtime.RealtimeConversationSessionOptions();
                             sdkOptions.AudioOptions = new OpenAI.Realtime.RealtimeConversationSessionAudioOptions
                             {
-                                InputAudioOptions = new OpenAI.Realtime.RealtimeConversationSessionInputAudioOptions
-                                {
-                                    TurnDetection = new OpenAI.Realtime.RealtimeServerVadTurnDetection
-                                    {
-                                        CreateResponseEnabled = true,
-                                    },
-                                },
                                 OutputAudioOptions = new OpenAI.Realtime.RealtimeConversationSessionOutputAudioOptions
                                 {
                                     Speed = (float)speedValue,
@@ -951,6 +954,8 @@ namespace RealtimePlayGround
                 cmbLogLevel.Enabled = false;
                 cmbVoice.Enabled = false;
                 cmbProvider.Enabled = false;
+                chkVadEnabled.Enabled = false;
+                chkAllowInterruption.Enabled = false;
                 statusLabel.Text = $"Connected to {providerName} Realtime.";
 
                 await StartStreamingAsync();
@@ -1117,6 +1122,8 @@ namespace RealtimePlayGround
                 cmbLogLevel.Enabled = true;
                 cmbVoice.Enabled = true;
                 cmbProvider.Enabled = true;
+                chkVadEnabled.Enabled = true;
+                chkAllowInterruption.Enabled = true;
             }
             catch (Exception ex)
             {
@@ -1252,18 +1259,16 @@ namespace RealtimePlayGround
                         Instructions = "You are a funny chat bot.",
                         Voice = selectedVoice,
                         TranscriptionOptions = new TranscriptionOptions { ModelId = "whisper-1", SpeechLanguage = "en" },
+                        VoiceActivityDetection = new VoiceActivityDetectionOptions
+                        {
+                            Enabled = chkVadEnabled.Checked,
+                            AllowInterruption = chkAllowInterruption.Checked,
+                        },
                         RawRepresentationFactory = () =>
                         {
                             var sdkOptions = new OpenAI.Realtime.RealtimeConversationSessionOptions();
                             sdkOptions.AudioOptions = new OpenAI.Realtime.RealtimeConversationSessionAudioOptions
                             {
-                                InputAudioOptions = new OpenAI.Realtime.RealtimeConversationSessionInputAudioOptions
-                                {
-                                    TurnDetection = new OpenAI.Realtime.RealtimeServerVadTurnDetection
-                                    {
-                                        CreateResponseEnabled = true,
-                                    },
-                                },
                                 OutputAudioOptions = new OpenAI.Realtime.RealtimeConversationSessionOutputAudioOptions
                                 {
                                     Speed = (float)speedValue,
