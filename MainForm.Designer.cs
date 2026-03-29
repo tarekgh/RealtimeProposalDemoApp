@@ -211,7 +211,8 @@ namespace RealtimePlayGround
             this.cmbProvider.FormattingEnabled = true;
             this.cmbProvider.Items.AddRange(new object[] {
             "OpenAI",
-            "Google Gemini"});
+            "Google Gemini",
+            "AWS Bedrock"});
             this.cmbProvider.Location = new System.Drawing.Point(12, 342);
             this.cmbProvider.Name = "cmbProvider";
             this.cmbProvider.Size = new System.Drawing.Size(150, 25);

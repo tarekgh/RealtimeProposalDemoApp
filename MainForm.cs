@@ -4,6 +4,9 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using NAudio.Wave;
 using Google.GenAI;
+using Amazon;
+using Amazon.BedrockRuntime;
+using Amazon.BedrockRuntime.Model;
 using Sdk = OpenAI.Realtime;
 using System;
 using System.Collections.Generic;
@@ -497,6 +500,8 @@ namespace RealtimePlayGround
                 // Re-enable speed control if session is active (OpenAI only)
                 if (_isCallActive && cmbProvider.SelectedIndex == 0)
                     trackSpeed.Enabled = true;
+                else
+                    trackSpeed.Enabled = false;
 
                 btnRecord.Enabled = true;
 
@@ -628,19 +633,25 @@ namespace RealtimePlayGround
                     return;
                 }
 
-                // Convert to 24kHz mono PCM16 (required by OpenAI)
-                byte[] monoAudio = ConvertToMono(audioData, format.Channels);
-                byte[] resampledAudio = ResampleAudio(monoAudio, format.SampleRate, 24000);
+                // Convert to mono PCM16 at the target sample rate
+                // OpenAI: 24kHz, Gemini/Bedrock: 16kHz
+                bool isBedrock = cmbProvider.SelectedIndex == 2;
+                bool isGeminiProvider = cmbProvider.SelectedIndex == 1;
+                int targetSampleRate = (isBedrock || isGeminiProvider) ? 16000 : 24000;
 
-                // Check minimum length (100ms = 4800 bytes at 24kHz 16-bit mono)
-                if (resampledAudio.Length < 4800)
+                byte[] monoAudio = ConvertToMono(audioData, format.Channels);
+                byte[] resampledAudio = ResampleAudio(monoAudio, format.SampleRate, targetSampleRate);
+
+                // Check minimum length (100ms)
+                int minBytes = targetSampleRate * 2 / 10; // 100ms at 16-bit mono
+                if (resampledAudio.Length < minBytes)
                 {
-                    double durationMs = (resampledAudio.Length / 2.0) / 24000.0 * 1000.0;
+                    double durationMs = (resampledAudio.Length / 2.0) / targetSampleRate * 1000.0;
                     statusLabel.Text = $"Audio too short ({durationMs:F0}ms). Need 100ms+.";
                     return;
                 }
 
-                double audioDurationMs = (resampledAudio.Length / 2.0) / 24000.0 * 1000.0;
+                double audioDurationMs = (resampledAudio.Length / 2.0) / targetSampleRate * 1000.0;
 
                 if (_realtimeSession != null)
                 {
@@ -817,8 +828,24 @@ namespace RealtimePlayGround
             {
                 var config = new ConfigurationBuilder().AddUserSecrets<MainForm>().Build();
                 bool isGemini = cmbProvider.SelectedIndex == 1;
+                bool isBedrock = cmbProvider.SelectedIndex == 2;
 
-                if (isGemini)
+                if (isBedrock)
+                {
+                    string? accessKeyId = config["AWS:AccessKeyId"];
+                    string? secretAccessKey = config["AWS:SecretAccessKey"];
+                    if (string.IsNullOrEmpty(accessKeyId) || string.IsNullOrEmpty(secretAccessKey))
+                    {
+                        WriteErrorToRichTextBox("AWS IAM credentials are not set. Use:\n" +
+                            "  dotnet user-secrets set \"AWS:AccessKeyId\" \"AKIA...\"\n" +
+                            "  dotnet user-secrets set \"AWS:SecretAccessKey\" \"<your-secret-key>\"");
+                        return;
+                    }
+
+                    var regionName = config["AWS:Region"] ?? "us-east-1";
+                    _realtimeClient = new BedrockNovaRealtimeClient(accessKeyId, secretAccessKey, regionName);
+                }
+                else if (isGemini)
                 {
                     string? geminiKey = config["Google:AI:ApiKey"];
                     if (string.IsNullOrEmpty(geminiKey))
@@ -827,8 +854,7 @@ namespace RealtimePlayGround
                         return;
                     }
 
-                    var geminiClient = new Client(apiKey: geminiKey);
-                    _realtimeClient = new GoogleGenAIRealtimeClient(geminiClient, "gemini-2.5-flash-native-audio-preview-12-2025");
+                    _realtimeClient = new GoogleGenAIRealtimeClient(geminiKey, "gemini-3.1-flash-live-preview");
                 }
                 else
                 {
@@ -842,26 +868,38 @@ namespace RealtimePlayGround
                     _realtimeClient = new OpenAIRealtimeClient(openAiKey, "gpt-realtime-1.5");
                 }
 
-                string providerName = isGemini ? "Google Gemini" : "OpenAI";
+                string providerName = isBedrock ? "AWS Bedrock" : isGemini ? "Google Gemini" : "OpenAI";
                 statusLabel.Text = $"Connecting to {providerName}...";
 
                 AIFunction getWeatherFunction = AIFunctionFactory.Create(
                     (string location) =>
-                        location switch
+                        location.ToLowerInvariant() switch
                         {
-                            "Seattle" => $"The weather in {location} is rainy, 55°F",
-                            "New York" => $"The weather in {location} is cloudy, 70°F",
-                            "San Francisco" => $"The weather in {location} is foggy, 60°F",
+                            var l when l.Contains("seattle") => $"The weather in {location} is rainy, 55°F",
+                            var l when l.Contains("new york") => $"The weather in {location} is cloudy, 70°F",
+                            var l when l.Contains("san francisco") => $"The weather in {location} is foggy, 60°F",
                             _ => $"Sorry, I don't have weather data for {location}."
                         },
                     "GetWeather",
                     "Gets the current weather for a given location");
 
-                string selectedVoice = cmbVoice.SelectedItem?.ToString() ?? (isGemini ? "Puck" : "alloy");
+                string selectedVoice = cmbVoice.SelectedItem?.ToString() ?? (isBedrock ? "matthew" : isGemini ? "Puck" : "alloy");
 
                 // Build session options (some fields are provider-specific)
                 RealtimeSessionOptions sessionOptions;
-                if (isGemini)
+                if (isBedrock)
+                {
+                    sessionOptions = new RealtimeSessionOptions
+                    {
+                        Instructions = "You are a funny chat bot.",
+                        Voice = selectedVoice,
+                        MaxOutputTokens = 1024,
+                        Tools = [getWeatherFunction],
+                        InputAudioFormat = new RealtimeAudioFormat("audio/lpcm", 16000),
+                        OutputAudioFormat = new RealtimeAudioFormat("audio/lpcm", 24000),
+                    };
+                }
+                else if (isGemini)
                 {
                     sessionOptions = new RealtimeSessionOptions
                     {
@@ -870,6 +908,7 @@ namespace RealtimePlayGround
                         Voice = selectedVoice,
                         TranscriptionOptions = new TranscriptionOptions(),
                         Tools = [getWeatherFunction],
+                        InputAudioFormat = new RealtimeAudioFormat("audio/pcm;rate=16000", 16000),
                         VoiceActivityDetection = new VoiceActivityDetectionOptions
                         {
                             Enabled = chkVadEnabled.Checked,
@@ -933,9 +972,17 @@ namespace RealtimePlayGround
 
                 try
                 {
-                    _realtimeSession = isGemini
-                        ? await wrappedClient.CreateSessionAsync(sessionOptions)
+                    using var connectCts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+
+                    _realtimeSession = (isGemini || isBedrock)
+                        ? await wrappedClient.CreateSessionAsync(sessionOptions, connectCts.Token)
                         : await wrappedClient.CreateSessionAsync();
+                }
+                catch (OperationCanceledException)
+                {
+                    WriteErrorToRichTextBox($"Connection to {providerName} timed out after 30 seconds.");
+                    statusLabel.Text = "Connection timed out.";
+                    return;
                 }
                 catch (Exception ex)
                 {
@@ -950,7 +997,7 @@ namespace RealtimePlayGround
                 btnRecord.Enabled = true;
                 btnSend.Enabled = true;
                 richTextBox2.Enabled = true;
-                trackSpeed.Enabled = !isGemini;
+                trackSpeed.Enabled = !isGemini && !isBedrock;
                 cmbLogLevel.Enabled = false;
                 cmbVoice.Enabled = false;
                 cmbProvider.Enabled = false;
@@ -961,7 +1008,7 @@ namespace RealtimePlayGround
                 await StartStreamingAsync();
 
                 // For OpenAI, send session update after connection
-                if (!isGemini)
+                if (!isGemini && !isBedrock)
                 {
                     await _realtimeSession.SendAsync(new SessionUpdateRealtimeClientMessage(sessionOptions));
                 }
@@ -1215,10 +1262,15 @@ namespace RealtimePlayGround
         private void cmbProvider_SelectedIndexChanged(object? sender, EventArgs e)
         {
             bool isGemini = cmbProvider.SelectedIndex == 1;
+            bool isBedrock = cmbProvider.SelectedIndex == 2;
 
             // Update voice options based on provider
             cmbVoice.Items.Clear();
-            if (isGemini)
+            if (isBedrock)
+            {
+                cmbVoice.Items.AddRange(new object[] { "matthew", "ruth", "tiffany", "amy" });
+            }
+            else if (isGemini)
             {
                 cmbVoice.Items.AddRange(new object[] { "Puck", "Charon", "Kore", "Fenrir", "Aoede", "Leda", "Orus", "Zephyr" });
             }
@@ -1229,7 +1281,7 @@ namespace RealtimePlayGround
             cmbVoice.SelectedIndex = 0;
 
             // Speed control is OpenAI-specific
-            trackSpeed.Enabled = !isGemini;
+            trackSpeed.Enabled = !isGemini && !isBedrock;
         }
 
         private double GetSpeedValue()
@@ -1306,6 +1358,13 @@ namespace RealtimePlayGround
                 if (text.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
                     text.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
                 {
+                    if (cmbProvider.SelectedIndex == 2) // AWS Bedrock
+                    {
+                        WriteErrorToRichTextBox("Image input is not supported with AWS Bedrock Nova Sonic. This model only supports audio and text input.\n");
+                        statusLabel.Text = "Ready";
+                        return;
+                    }
+
                     await HandleImageUrlAsync(text);
                 }
                 else
