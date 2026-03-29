@@ -47,6 +47,7 @@ namespace RealtimePlayGround
         private ActivityListener? _activityListener;
         private MeterListener? _meterListener;
         private readonly object _recordingLock = new();
+        private volatile bool _dataReceivedFlag;
         private int _selectedDeviceNumber = 0;
         private int _workingSampleRate = 44100;
 
@@ -335,11 +336,11 @@ namespace RealtimePlayGround
             }
         }
 
-        private void btnRecord_Click(object sender, EventArgs e)
+        private async void btnRecord_Click(object sender, EventArgs e)
         {
             if (!_isRecording)
             {
-                StartRecording();
+                await StartRecordingAsync();
             }
             else
             {
@@ -347,27 +348,23 @@ namespace RealtimePlayGround
             }
         }
 
-        private void StartRecording()
+        private async Task StartRecordingAsync()
         {
+            const int maxAttempts = 3;
+
             try
             {
                 btnRecord.Enabled = false;
                 btnPlay.Enabled = false;
 
-                // Clean up any existing resources
-                StopAndDisposeWaveIn();
-                CleanupRecordingResources();
-
-                // Stop playback if playing
+                // Stop and discard any ongoing audio playback
                 if (_waveOut?.PlaybackState == PlaybackState.Playing)
                 {
                     _waveOut.Stop();
                 }
+                _audioProvider?.ClearBuffer();
 
                 statusLabel.Text = "Starting recording...";
-
-                // Prepare file path
-                _audioFilePath = Path.Combine(Path.GetTempPath(), $"recorded_audio_{DateTime.Now:yyyyMMdd_HHmmss}.wav");
 
                 // Check available devices
                 int deviceCount = WaveIn.DeviceCount;
@@ -376,38 +373,77 @@ namespace RealtimePlayGround
                     throw new InvalidOperationException("No recording devices found.");
                 }
 
-                // Configure recording format using the working sample rate
-                _recordingFormat = new WaveFormat(_workingSampleRate, 16, 1);
-
-                // Use WaveIn (callback-based, works better with Windows Forms)
-                _waveIn = new WaveIn
+                for (int attempt = 1; attempt <= maxAttempts; attempt++)
                 {
-                    DeviceNumber = _selectedDeviceNumber,
-                    WaveFormat = _recordingFormat,
-                    BufferMilliseconds = 100,
-                    NumberOfBuffers = 3
-                };
+                    // Clean up any existing resources before each attempt
+                    StopAndDisposeWaveIn();
+                    CleanupRecordingResources();
 
-                // Create WAV file writer
-                _waveFileWriter = new WaveFileWriter(_audioFilePath, _recordingFormat);
+                    if (attempt > 1)
+                    {
+                        statusLabel.Text = $"Retrying recording (attempt {attempt}/{maxAttempts})...";
+                        // Brief pause between retries to let the device fully release
+                        await Task.Delay(200).ConfigureAwait(true);
+                    }
 
-                // Hook up the data available event
-                _waveIn.DataAvailable += WaveIn_DataAvailable;
-                _waveIn.RecordingStopped += WaveIn_RecordingStopped;
+                    // Prepare file path
+                    _audioFilePath = Path.Combine(Path.GetTempPath(), $"recorded_audio_{DateTime.Now:yyyyMMdd_HHmmss}.wav");
 
-                // Start recording
-                _waveIn.StartRecording();
-                _isRecording = true;
+                    // Configure recording format using the working sample rate
+                    _recordingFormat = new WaveFormat(_workingSampleRate, 16, 1);
 
-                // Update UI
-                if (_muteIcon != null)
-                    btnRecord.Image = _muteIcon;
-                
-                trackSpeed.Enabled = false;
-                btnRecord.Enabled = true;
+                    _waveIn = new WaveIn
+                    {
+                        DeviceNumber = _selectedDeviceNumber,
+                        WaveFormat = _recordingFormat,
+                        BufferMilliseconds = 100,
+                        NumberOfBuffers = 3
+                    };
 
-                statusLabel.Text = $"Recording at {_workingSampleRate}Hz... Speak now!";
-                System.Diagnostics.Debug.WriteLine($"Recording started at {_workingSampleRate}Hz");
+                    // Create WAV file writer
+                    _waveFileWriter = new WaveFileWriter(_audioFilePath, _recordingFormat);
+
+                    // Hook up the data available event
+                    _waveIn.DataAvailable += WaveIn_DataAvailable;
+                    _waveIn.RecordingStopped += WaveIn_RecordingStopped;
+
+                    // Reset verification flag and start recording
+                    _dataReceivedFlag = false;
+                    _waveIn.StartRecording();
+
+                    // Yield the UI thread so the WaveIn message pump callbacks can fire.
+                    // WaveIn delivers data via Windows messages — Task.Delay lets the
+                    // message loop process them, unlike Thread.Sleep which blocks.
+                    for (int i = 0; i < 10 && !_dataReceivedFlag; i++)
+                    {
+                        await Task.Delay(100).ConfigureAwait(true);
+                    }
+
+                    if (_dataReceivedFlag)
+                    {
+                        // Recording is verified — data is flowing
+                        _isRecording = true;
+
+                        if (_muteIcon != null)
+                            btnRecord.Image = _muteIcon;
+
+                        trackSpeed.Enabled = false;
+                        btnRecord.Enabled = true;
+
+                        statusLabel.Text = $"Recording at {_workingSampleRate}Hz... Speak now!";
+                        System.Diagnostics.Debug.WriteLine($"Recording started at {_workingSampleRate}Hz (attempt {attempt})");
+                        return;
+                    }
+
+                    // Data didn't flow — retry
+                    System.Diagnostics.Debug.WriteLine($"Recording attempt {attempt}/{maxAttempts}: no data received, retrying...");
+                }
+
+                // All attempts failed
+                StopAndDisposeWaveIn();
+                CleanupRecordingResources();
+                throw new InvalidOperationException(
+                    $"Microphone did not produce audio data after {maxAttempts} attempts.");
             }
             catch (Exception ex)
             {
@@ -437,6 +473,7 @@ namespace RealtimePlayGround
             {
                 if (_waveFileWriter != null && e.BytesRecorded > 0)
                 {
+                    _dataReceivedFlag = true;
                     _waveFileWriter.Write(e.Buffer, 0, e.BytesRecorded);
 
                     // Calculate peak level for visual feedback
