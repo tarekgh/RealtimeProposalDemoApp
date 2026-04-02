@@ -880,7 +880,15 @@ namespace RealtimePlayGround
                     }
 
                     var regionName = config["AWS:Region"] ?? "us-east-1";
-                    _realtimeClient = new BedrockNovaRealtimeClient(accessKeyId, secretAccessKey, regionName);
+                    var credentials = new Amazon.Runtime.BasicAWSCredentials(accessKeyId, secretAccessKey);
+                    var bedrockConfig = new Amazon.BedrockRuntime.AmazonBedrockRuntimeConfig
+                    {
+                        RegionEndpoint = Amazon.RegionEndpoint.GetBySystemName(regionName),
+                        Timeout = TimeSpan.FromMinutes(10)
+                    };
+                    _realtimeClient = new BedrockNovaRealtimeClient(
+                        new Amazon.BedrockRuntime.AmazonBedrockRuntimeClient(credentials, bedrockConfig),
+                        "amazon.nova-2-sonic-v1:0");
                 }
                 else if (isGemini)
                 {
