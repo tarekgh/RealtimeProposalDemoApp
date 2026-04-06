@@ -4,6 +4,8 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using NAudio.Wave;
 using Google.GenAI;
+using Google.Cloud.AIPlatform.V1;
+using Google.Cloud.VertexAI.Extensions;
 using Amazon;
 using Amazon.BedrockRuntime;
 using Amazon.BedrockRuntime.Model;
@@ -671,10 +673,11 @@ namespace RealtimePlayGround
                 }
 
                 // Convert to mono PCM16 at the target sample rate
-                // OpenAI: 24kHz, Gemini/Bedrock: 16kHz
+                // OpenAI: 24kHz, Gemini/Bedrock/VertexAI: 16kHz
                 bool isBedrock = cmbProvider.SelectedIndex == 2;
                 bool isGeminiProvider = cmbProvider.SelectedIndex == 1;
-                int targetSampleRate = (isBedrock || isGeminiProvider) ? 16000 : 24000;
+                bool isVertexAIProvider = cmbProvider.SelectedIndex == 3;
+                int targetSampleRate = (isBedrock || isGeminiProvider || isVertexAIProvider) ? 16000 : 24000;
 
                 byte[] monoAudio = ConvertToMono(audioData, format.Channels);
                 byte[] resampledAudio = ResampleAudio(monoAudio, format.SampleRate, targetSampleRate);
@@ -866,9 +869,12 @@ namespace RealtimePlayGround
                 var config = new ConfigurationBuilder().AddUserSecrets<MainForm>().Build();
                 bool isGemini = cmbProvider.SelectedIndex == 1;
                 bool isBedrock = cmbProvider.SelectedIndex == 2;
+                bool isVertexAI = cmbProvider.SelectedIndex == 3;
 
                 if (isBedrock)
                 {
+                    // AWS Bedrock: Authenticated via explicit IAM credentials (access key + secret key)
+                    // stored in user secrets and passed as BasicAWSCredentials.
                     string? accessKeyId = config["AWS:AccessKeyId"];
                     string? secretAccessKey = config["AWS:SecretAccessKey"];
                     if (string.IsNullOrEmpty(accessKeyId) || string.IsNullOrEmpty(secretAccessKey))
@@ -892,6 +898,8 @@ namespace RealtimePlayGround
                 }
                 else if (isGemini)
                 {
+                    // Google Gemini (AI Studio): Authenticated via a plain API key
+                    // obtained from Google AI Studio and stored in user secrets.
                     string? geminiKey = config["Google:AI:ApiKey"];
                     if (string.IsNullOrEmpty(geminiKey))
                     {
@@ -901,8 +909,55 @@ namespace RealtimePlayGround
 
                     _realtimeClient = new GoogleGenAIRealtimeClient(geminiKey, "gemini-3.1-flash-live-preview");
                 }
+                else if (isVertexAI)
+                {
+                    // Vertex AI: Authenticated via a service account JSON stored in user secrets,
+                    // or falls back to Application Default Credentials (ADC) if not set.
+                    // To use a service account:
+                    //   $json = Get-Content service-account.json -Raw
+                    //   dotnet user-secrets set "Google:Cloud:ServiceAccountJson" $json
+                    // To use ADC instead: gcloud auth application-default login
+                    string? serviceAccountJson = config["Google:Cloud:ServiceAccountJson"];
+                    string? projectId = config["Google:Cloud:ProjectId"];
+                    string? location = config["Google:Cloud:Location"] ?? "us-central1";
+
+                    // Extract project_id from the service account JSON if not explicitly set
+                    if (string.IsNullOrEmpty(projectId) && !string.IsNullOrEmpty(serviceAccountJson))
+                    {
+                        try
+                        {
+                            using var doc = System.Text.Json.JsonDocument.Parse(serviceAccountJson);
+                            projectId = doc.RootElement.TryGetProperty("project_id", out var pid) ? pid.GetString() : null;
+                        }
+                        catch (System.Text.Json.JsonException)
+                        {
+                            // Invalid JSON — will fail below
+                        }
+                    }
+
+                    if (string.IsNullOrEmpty(projectId))
+                    {
+                        WriteErrorToRichTextBox("Google Cloud project ID is not set. Either set Google:Cloud:ServiceAccountJson (which contains project_id) or set Google:Cloud:ProjectId explicitly.");
+                        return;
+                    }
+
+                    string vertexModel = $"projects/{projectId}/locations/{location}/publishers/google/models/gemini-live-2.5-flash-native-audio";
+                    var vertexBuilder = new PredictionServiceClientBuilder
+                    {
+                        Endpoint = $"{location}-aiplatform.googleapis.com",
+                    };
+
+                    if (!string.IsNullOrEmpty(serviceAccountJson))
+                    {
+                        vertexBuilder.JsonCredentials = serviceAccountJson;
+                    }
+
+                    _realtimeClient = vertexBuilder.BuildIRealtimeClient(vertexModel);
+                }
                 else
                 {
+                    // OpenAI: Authenticated via an API key from the OpenAI platform,
+                    // stored in user secrets and passed directly to the client constructor.
                     string? openAiKey = config["OpenAIKey"];
                     if (string.IsNullOrEmpty(openAiKey))
                     {
@@ -913,7 +968,7 @@ namespace RealtimePlayGround
                     _realtimeClient = new OpenAIRealtimeClient(openAiKey, "gpt-realtime-1.5");
                 }
 
-                string providerName = isBedrock ? "AWS Bedrock" : isGemini ? "Google Gemini" : "OpenAI";
+                string providerName = isBedrock ? "AWS Bedrock" : isGemini ? "Google Gemini" : isVertexAI ? "Vertex AI" : "OpenAI";
                 statusLabel.Text = $"Connecting to {providerName}...";
 
                 AIFunction getWeatherFunction = AIFunctionFactory.Create(
@@ -928,7 +983,7 @@ namespace RealtimePlayGround
                     "GetWeather",
                     "Gets the current weather for a given location");
 
-                string selectedVoice = cmbVoice.SelectedItem?.ToString() ?? (isBedrock ? "matthew" : isGemini ? "Puck" : "alloy");
+                string selectedVoice = cmbVoice.SelectedItem?.ToString() ?? (isBedrock ? "matthew" : (isGemini || isVertexAI) ? "Puck" : "alloy");
 
                 // Build session options (some fields are provider-specific)
                 RealtimeSessionOptions sessionOptions;
@@ -945,6 +1000,23 @@ namespace RealtimePlayGround
                     };
                 }
                 else if (isGemini)
+                {
+                    sessionOptions = new RealtimeSessionOptions
+                    {
+                        OutputModalities = ["audio"],
+                        Instructions = "You are a funny chat bot.",
+                        Voice = selectedVoice,
+                        TranscriptionOptions = new TranscriptionOptions(),
+                        Tools = [getWeatherFunction],
+                        InputAudioFormat = new RealtimeAudioFormat("audio/pcm;rate=16000", 16000),
+                        VoiceActivityDetection = new VoiceActivityDetectionOptions
+                        {
+                            Enabled = chkVadEnabled.Checked,
+                            AllowInterruption = chkAllowInterruption.Checked,
+                        },
+                    };
+                }
+                else if (isVertexAI)
                 {
                     sessionOptions = new RealtimeSessionOptions
                     {
@@ -1019,7 +1091,7 @@ namespace RealtimePlayGround
                 {
                     using var connectCts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
 
-                    _realtimeSession = (isGemini || isBedrock)
+                    _realtimeSession = (isGemini || isBedrock || isVertexAI)
                         ? await wrappedClient.CreateSessionAsync(sessionOptions, connectCts.Token)
                         : await wrappedClient.CreateSessionAsync();
                 }
@@ -1042,7 +1114,7 @@ namespace RealtimePlayGround
                 btnRecord.Enabled = true;
                 btnSend.Enabled = true;
                 richTextBox2.Enabled = true;
-                trackSpeed.Enabled = !isGemini && !isBedrock;
+                trackSpeed.Enabled = !isGemini && !isBedrock && !isVertexAI;
                 cmbLogLevel.Enabled = false;
                 cmbVoice.Enabled = false;
                 cmbProvider.Enabled = false;
@@ -1053,7 +1125,7 @@ namespace RealtimePlayGround
                 await StartStreamingAsync();
 
                 // For OpenAI, send session update after connection
-                if (!isGemini && !isBedrock)
+                if (!isGemini && !isBedrock && !isVertexAI)
                 {
                     await _realtimeSession.SendAsync(new SessionUpdateRealtimeClientMessage(sessionOptions));
                 }
@@ -1308,6 +1380,7 @@ namespace RealtimePlayGround
         {
             bool isGemini = cmbProvider.SelectedIndex == 1;
             bool isBedrock = cmbProvider.SelectedIndex == 2;
+            bool isVertexAI = cmbProvider.SelectedIndex == 3;
 
             // Update voice options based on provider
             cmbVoice.Items.Clear();
@@ -1315,7 +1388,7 @@ namespace RealtimePlayGround
             {
                 cmbVoice.Items.AddRange(new object[] { "matthew", "ruth", "tiffany", "amy" });
             }
-            else if (isGemini)
+            else if (isGemini || isVertexAI)
             {
                 cmbVoice.Items.AddRange(new object[] { "Puck", "Charon", "Kore", "Fenrir", "Aoede", "Leda", "Orus", "Zephyr" });
             }
@@ -1326,7 +1399,7 @@ namespace RealtimePlayGround
             cmbVoice.SelectedIndex = 0;
 
             // Speed control is OpenAI-specific
-            trackSpeed.Enabled = !isGemini && !isBedrock;
+            trackSpeed.Enabled = !isGemini && !isBedrock && !isVertexAI;
         }
 
         private double GetSpeedValue()
