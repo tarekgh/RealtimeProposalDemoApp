@@ -8,7 +8,8 @@ using Google.Cloud.AIPlatform.V1;
 using Google.Cloud.VertexAI.Extensions;
 using Amazon;
 using Amazon.BedrockRuntime;
-using Amazon.BedrockRuntime.Model;
+using Amazon.Runtime;
+using Amazon.Runtime.Credentials;
 using Sdk = OpenAI.Realtime;
 using System;
 using System.Collections.Generic;
@@ -873,27 +874,40 @@ namespace RealtimePlayGround
 
                 if (isBedrock)
                 {
+                    AWSCredentials? credentials = null;
+
                     // AWS Bedrock: Authenticated via explicit IAM credentials (access key + secret key)
                     // stored in user secrets and passed as BasicAWSCredentials.
                     string? accessKeyId = config["AWS:AccessKeyId"];
                     string? secretAccessKey = config["AWS:SecretAccessKey"];
-                    if (string.IsNullOrEmpty(accessKeyId) || string.IsNullOrEmpty(secretAccessKey))
+                    if (!string.IsNullOrEmpty(accessKeyId) && !string.IsNullOrEmpty(secretAccessKey))
                     {
-                        WriteErrorToRichTextBox("AWS IAM credentials are not set. Use:\n" +
-                            "  dotnet user-secrets set \"AWS:AccessKeyId\" \"AKIA...\"\n" +
-                            "  dotnet user-secrets set \"AWS:SecretAccessKey\" \"<your-secret-key>\"");
-                        return;
+                        credentials = new BasicAWSCredentials(accessKeyId, secretAccessKey);
+                    }
+                    // If no explicit credentials are set, fall back to the default credential resolver which searched the environment for default credentials.
+                    else
+                    {
+                        try
+                        {
+                            credentials = await DefaultAWSCredentialsIdentityResolver.GetCredentialsAsync();
+                        }
+                        catch (Exception)
+                        {
+                            WriteErrorToRichTextBox("AWS IAM credentials are not set. Use:\n" +
+                                "  dotnet user-secrets set \"AWS:AccessKeyId\" \"AKIA...\"\n" +
+                                "  dotnet user-secrets set \"AWS:SecretAccessKey\" \"<your-secret-key>\"");
+                            return;
+                        }
                     }
 
                     var regionName = config["AWS:Region"] ?? "us-east-1";
-                    var credentials = new Amazon.Runtime.BasicAWSCredentials(accessKeyId, secretAccessKey);
-                    var bedrockConfig = new Amazon.BedrockRuntime.AmazonBedrockRuntimeConfig
+                    var bedrockConfig = new AmazonBedrockRuntimeConfig
                     {
-                        RegionEndpoint = Amazon.RegionEndpoint.GetBySystemName(regionName),
+                        RegionEndpoint = RegionEndpoint.GetBySystemName(regionName),
                         Timeout = TimeSpan.FromMinutes(10)
                     };
                     _realtimeClient = new BedrockNovaRealtimeClient(
-                        new Amazon.BedrockRuntime.AmazonBedrockRuntimeClient(credentials, bedrockConfig),
+                        new AmazonBedrockRuntimeClient(credentials, bedrockConfig),
                         "amazon.nova-2-sonic-v1:0");
                 }
                 else if (isGemini)
