@@ -942,9 +942,10 @@ namespace RealtimePlayGround
                     }
 
                     string vertexModel = $"projects/{projectId}/locations/{location}/publishers/google/models/gemini-live-2.5-flash-native-audio";
-                    var vertexBuilder = new PredictionServiceClientBuilder
+                    var vertexBuilder = new PredictionServiceRealtimeClientBuilder
                     {
                         Endpoint = $"{location}-aiplatform.googleapis.com",
+                        DefaultModelId = vertexModel,
                     };
 
                     if (!string.IsNullOrEmpty(serviceAccountJson))
@@ -952,7 +953,7 @@ namespace RealtimePlayGround
                         vertexBuilder.JsonCredentials = serviceAccountJson;
                     }
 
-                    _realtimeClient = vertexBuilder.BuildIRealtimeClient(vertexModel);
+                    _realtimeClient = vertexBuilder.Build();
                 }
                 else
                 {
