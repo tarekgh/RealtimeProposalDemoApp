@@ -966,7 +966,7 @@ namespace RealtimePlayGround
                         return;
                     }
 
-                    _realtimeClient = new OpenAIRealtimeClient(openAiKey, "gpt-realtime-1.5");
+                    _realtimeClient = new OpenAIRealtimeClient(openAiKey, "gpt-realtime-2");
                 }
 
                 string providerName = isBedrock ? "AWS Bedrock" : isGemini ? "Google Gemini" : isVertexAI ? "Vertex AI" : "OpenAI";
