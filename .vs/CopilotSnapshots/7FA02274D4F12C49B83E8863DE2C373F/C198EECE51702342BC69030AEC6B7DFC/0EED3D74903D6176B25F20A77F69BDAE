@@ -1,9 +1,8 @@
-using Microsoft.Extensions.AI;
+﻿using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using NAudio.Wave;
-using Google.Apis.Auth.OAuth2;
 using Google.GenAI;
 using Google.Cloud.AIPlatform.V1;
 using Google.Cloud.VertexAI.Extensions;
@@ -951,9 +950,7 @@ namespace RealtimePlayGround
 
                     if (!string.IsNullOrEmpty(serviceAccountJson))
                     {
-                        using var credentialStream = new MemoryStream(Encoding.UTF8.GetBytes(serviceAccountJson));
-                        var serviceAccountCredential = ServiceAccountCredential.FromServiceAccountData(credentialStream);
-                        vertexBuilder.GoogleCredential = GoogleCredential.FromServiceAccountCredential(serviceAccountCredential);
+                        vertexBuilder.JsonCredentials = serviceAccountJson;
                     }
 
                     _realtimeClient = vertexBuilder.Build();
