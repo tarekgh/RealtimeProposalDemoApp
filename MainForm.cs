@@ -3,6 +3,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using NAudio.Wave;
+using Google.Apis.Auth.OAuth2;
 using Google.GenAI;
 using Google.Cloud.AIPlatform.V1;
 using Google.Cloud.VertexAI.Extensions;
@@ -10,6 +11,7 @@ using Amazon;
 using Amazon.BedrockRuntime;
 using Amazon.Runtime;
 using Amazon.Runtime.Credentials;
+using AWS.Bedrock.MEAI;
 using Sdk = OpenAI.Realtime;
 using System;
 using System.Collections.Generic;
@@ -956,17 +958,20 @@ namespace RealtimePlayGround
                     }
 
                     string vertexModel = $"projects/{projectId}/locations/{location}/publishers/google/models/gemini-live-2.5-flash-native-audio";
-                    var vertexBuilder = new PredictionServiceClientBuilder
+                    var vertexBuilder = new PredictionServiceRealtimeClientBuilder
                     {
                         Endpoint = $"{location}-aiplatform.googleapis.com",
+                        DefaultModelId = vertexModel,
                     };
 
                     if (!string.IsNullOrEmpty(serviceAccountJson))
                     {
-                        vertexBuilder.JsonCredentials = serviceAccountJson;
+                        using var credentialStream = new MemoryStream(Encoding.UTF8.GetBytes(serviceAccountJson));
+                        var serviceAccountCredential = ServiceAccountCredential.FromServiceAccountData(credentialStream);
+                        vertexBuilder.GoogleCredential = GoogleCredential.FromServiceAccountCredential(serviceAccountCredential);
                     }
 
-                    _realtimeClient = vertexBuilder.BuildIRealtimeClient(vertexModel);
+                    _realtimeClient = vertexBuilder.Build();
                 }
                 else
                 {
@@ -979,7 +984,7 @@ namespace RealtimePlayGround
                         return;
                     }
 
-                    _realtimeClient = new OpenAIRealtimeClient(openAiKey, "gpt-realtime-1.5");
+                    _realtimeClient = new OpenAIRealtimeClient(openAiKey, "gpt-realtime-2");
                 }
 
                 string providerName = isBedrock ? "AWS Bedrock" : isGemini ? "Google Gemini" : isVertexAI ? "Vertex AI" : "OpenAI";
